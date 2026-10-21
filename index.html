@@ -9,7 +9,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Zen+Maru+Gothic:wght@500;700&family=Noto+Sans+JP:wght@400;600&display=swap">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
-<link rel="stylesheet" href="style.css?v=2">
+<link rel="stylesheet" href="style.css?v=3">
 </head>
 <body>
 <header class="topbar">
@@ -52,11 +52,9 @@
       <div class="field">
         <span class="label">お題の間隔</span>
         <div class="seg" id="segInterval">
-          <button data-v="5">5分ごと</button><button data-v="8">8分ごと</button><button data-v="12">12分ごと</button>
+          <button data-v="5">多め</button><button data-v="8">ふつう</button><button data-v="12">少なめ</button>
         </div>
       </div>
-
-      <label class="check"><input type="checkbox" id="chkTopics"> お題の合間に、会話の話題も出す</label>
 
       <button id="btnMake" class="primary">ルートを作る</button>
       <p id="planError" class="error" hidden></p>
@@ -74,13 +72,30 @@
         <button id="btnReroll" class="ghost">別の道にする</button>
         <button id="btnSim" class="ghost">家で試す</button>
       </div>
-      <p class="hint">出発したらスマホはポケットへ。曲がり角とお題は音声で案内します。イヤホンを使うと聞きやすいです。</p>
+      <p class="hint">出発したら画面を閉じてOK。開いたときに、今いる場所と届いたお題が出ます。二人とも同じリンクで出発すると、同じ場所で同じ勝負が届きます。</p>
     </div>
   </section>
 
   <!-- 散歩中 -->
   <section id="view-walk" class="view walk" hidden>
     <div id="simBadge" class="simbadge" hidden>試しモード（8倍速）</div>
+
+    <div class="scoreboard" aria-label="今日の勝負">
+      <div class="side me"><span class="who">わたし</span><span class="pts" id="scoreMe">0</span></div>
+      <div class="vs">VS</div>
+      <div class="side you"><span class="who">あいて</span><span class="pts" id="scoreYou">0</span></div>
+    </div>
+
+    <div id="restCard" class="card rest" hidden>
+      <div class="cardlabel">休憩中</div>
+      <p id="restText"></p>
+      <button id="btnResume" class="primary">出発する</button>
+      <p class="hint">お店から離れると、自動で案内に戻ります</p>
+    </div>
+
+    <div id="inbox" class="inbox"></div>
+    <p id="inboxEmpty" class="hint center">次のお題は <b id="nextMissionIn">-</b> 先で届きます</p>
+
     <div class="next">
       <div class="arrow" id="nextArrow">↑</div>
       <div>
@@ -88,43 +103,22 @@
         <div class="nextsub" id="nextSub"></div>
       </div>
     </div>
+
     <div class="stats">
       <div><span class="label">残り</span><span id="statRemain" class="num">-</span></div>
       <div><span class="label">経過</span><span id="statTime" class="num">0分</span></div>
       <div><span class="label">写真</span><span id="statPhotos" class="num">0枚</span></div>
     </div>
 
-    <div id="restCard" class="card rest" hidden>
-      <div class="cardlabel">休憩中</div>
-      <p id="restText"></p>
-      <button id="btnResume" class="primary">出発する</button>
-      <p class="hint">お店から離れると、自動で案内を再開します</p>
-    </div>
-
-    <div id="missionCard" class="card mission" hidden>
-      <div class="cardlabel">お題</div>
-      <p id="missionText"></p>
-      <div class="row gap">
-        <button id="btnShoot" class="primary amber">撮る</button>
-        <button id="btnSkip" class="ghost">スキップ</button>
-      </div>
-    </div>
-
-    <div id="topicCard" class="card topic" hidden>
-      <div class="cardlabel">話題</div>
-      <p id="topicText"></p>
-    </div>
-
-    <div id="walkMap" class="map small"></div>
-
     <div id="offRoute" class="banner warn" hidden>
       ルートから外れているようです
       <button id="btnReroute" class="ghost">ここから道を引き直す</button>
     </div>
 
+    <div id="walkMap" class="map small"></div>
+
     <div class="row gap">
       <button id="btnFree" class="ghost">自由に撮る</button>
-      <button id="btnRepeat" class="ghost">もう一度聞く</button>
       <button id="btnEnd" class="ghost danger">散歩を終える</button>
     </div>
   </section>
@@ -132,6 +126,7 @@
   <!-- アルバム -->
   <section id="view-album" class="view" hidden>
     <h2>アルバム</h2>
+    <div id="albumTotal" class="total" hidden></div>
     <div id="albumList" class="albumlist"></div>
   </section>
 
@@ -139,6 +134,11 @@
     <button id="btnBack" class="ghost">← アルバムに戻る</button>
     <h2 id="detailTitle"></h2>
     <p id="detailMeta" class="muted"></p>
+    <div id="detailResult" class="result" hidden>
+      <div class="resulthead" id="resultHead"></div>
+      <div class="resultscore" id="resultScore"></div>
+      <div class="penalty" id="resultPenalty"></div>
+    </div>
     <div id="detailMap" class="map"></div>
     <div id="detailPhotos" class="photos"></div>
   </section>
@@ -153,7 +153,7 @@
 <div id="toast" class="toast" hidden></div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
-<script src="missions.js?v=2"></script>
-<script src="app.js?v=2"></script>
+<script src="missions.js?v=3"></script>
+<script src="app.js?v=3"></script>
 </body>
 </html>

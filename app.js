@@ -22,6 +22,7 @@ const STOP_TYPES = {
 const store = {
   get(k, d) { try { const v = localStorage.getItem("fs:" + k); return v == null ? d : JSON.parse(v); } catch { return d; } },
   set(k, v) { try { localStorage.setItem("fs:" + k, JSON.stringify(v)); } catch {} },
+  del(k) { try { localStorage.removeItem("fs:" + k); } catch {} },
 };
 
 let dbp = null;
@@ -88,36 +89,10 @@ function rng(seed) {
 function shuffle(arr, r) { const a = arr.slice(); for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(r() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; }
 
 const fmtKm = (m) => (m / 1000).toFixed(1);
+const fmtDist = (m) => (m >= 1000 ? `${fmtKm(m)}km` : `${Math.max(10, Math.round(m / 10) * 10)}m`);
 const fmtTime = (t) => new Date(t).toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit" });
 const fmtDate = (t) => new Date(t).toLocaleDateString("ja-JP", { month: "long", day: "numeric", weekday: "short" });
 
-// ---------- 音声・音 ----------
-let audioCtx = null, lastSpoken = "";
-function unlockAudio() {
-  try { if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)(); audioCtx.resume(); } catch {}
-  try { speechSynthesis.speak(new SpeechSynthesisUtterance("")); } catch {}
-}
-function chime(kind) {
-  if (!audioCtx) return;
-  const notes = kind === "mission" ? [784, 988, 1175] : kind === "turn" ? [660, 880] : [523, 659];
-  notes.forEach((f, i) => {
-    const o = audioCtx.createOscillator(), g = audioCtx.createGain(), t = audioCtx.currentTime + i * 0.14;
-    o.frequency.value = f; o.type = "sine";
-    g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.25, t + 0.02); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.35);
-    o.connect(g).connect(audioCtx.destination); o.start(t); o.stop(t + 0.4);
-  });
-}
-function speak(text, opts = {}) {
-  lastSpoken = text;
-  try {
-    const u = new SpeechSynthesisUtterance(text);
-    u.lang = "ja-JP"; u.rate = 1.02;
-    const v = speechSynthesis.getVoices().find((v) => v.lang && v.lang.startsWith("ja"));
-    if (v) u.voice = v;
-    if (opts.interrupt) speechSynthesis.cancel();
-    speechSynthesis.speak(u);
-  } catch {}
-}
 function buzz(pattern) { try { navigator.vibrate && navigator.vibrate(pattern); } catch {} }
 
 let toastTimer;
@@ -132,7 +107,6 @@ const plan = {
   minutes: store.get("minutes", 60),
   stop: store.get("stop", "cafe"),
   interval: store.get("interval", 8),
-  topics: store.get("topics", true),
   candidates: [],
   chosen: null,
   seed: Math.floor(Math.random() * 1e9),
@@ -299,7 +273,7 @@ function shapeRoute(r, waypoints, stopIndex) {
     });
     legEnds.push(along * scale);
   });
-  // 30m以内に続く曲がり角は1回の案内にまとめる
+  // 30m以内に続く曲がり角は1つの案内にまとめる
   for (let i = turns.length - 1; i > 0; i--) {
     const a = turns[i - 1], b = turns[i];
     if (b.along - a.along < 30) {
@@ -321,7 +295,7 @@ function turnText(step) {
   const d = DIRS[m.modifier];
   if (!d) return null;
   if (["new name", "continue"].includes(m.type) && m.modifier.startsWith("slight")) return null;
-  return { dir: d[0], arrow: d[1], name: step.name || "", right: m.modifier.includes("right") };
+  return { dir: d[0], arrow: d[1], name: step.name || "" };
 }
 
 async function buildRoute() {
@@ -387,7 +361,7 @@ async function onMake() {
 // ---------- 共有 ----------
 function shareLink() {
   const payload = {
-    h: plan.home.map((v) => +v.toFixed(5)), m: plan.minutes, i: plan.interval, tp: plan.topics ? 1 : 0, s: plan.seed, st: plan.stop,
+    h: plan.home.map((v) => +v.toFixed(5)), m: plan.minutes, i: plan.interval, s: plan.seed, st: plan.stop,
     c: plan.chosen && plan.stop !== "none" ? { n: plan.chosen.name, p: plan.chosen.pos.map((v) => +v.toFixed(5)), id: plan.chosen.id } : null,
   };
   // #以降はサーバーに送られないので、自宅の位置がホスティング先に残らない
@@ -406,7 +380,7 @@ async function loadShared() {
   if (!m) return false;
   try {
     const p = JSON.parse(decodeURIComponent(m[1]));
-    Object.assign(plan, { home: p.h, minutes: p.m, interval: p.i, topics: !!p.tp, seed: p.s, stop: p.st, shared: true });
+    Object.assign(plan, { home: p.h, minutes: p.m, interval: p.i, seed: p.s, stop: p.st, shared: true });
     plan.chosen = p.c ? { id: p.c.id, name: p.c.n, pos: p.c.p, d: dist(p.h, p.c.p) } : null;
     plan.candidates = plan.chosen ? [plan.chosen] : [];
     $("#sharedBanner").hidden = false;
@@ -418,68 +392,94 @@ async function loadShared() {
 }
 
 // ---------- お題の予定 ----------
-// 同じseedなら二人のスマホで同じ順番・同じタイミングになる
-function missionPlan(seed, minutes, interval, topics) {
+// お題は「歩いた距離」で届く。同じseedなら二人のスマホで同じ場所・同じお題になる
+function missionPlan(seed, total, interval, stopAlong) {
   const r = rng(seed ^ 0x5a5a);
-  const season = MISSIONS[seasonKey(new Date().getMonth() + 1)];
-  const general = shuffle(MISSIONS.general, r), couple = shuffle(MISSIONS.couple, r), seas = shuffle(season, r), tps = shuffle(TOPICS, r);
+  const pools = {};
+  ["race", "photo", "guess", "quiz", "game", "coop"].forEach((k) => (pools[k] = shuffle(MISSIONS[k], r)));
+  pools.photo = shuffle([...pools.photo, ...MISSIONS[seasonKey(new Date().getMonth() + 1)]], r);
+  const rare = shuffle(MISSIONS.rare, r);
+  const order = ["race", "photo", "quiz", "coop", "game", "guess", "photo", "race", "coop", "quiz", "game", "photo"];
+  const used = {};
+  const step = interval * 60 * WALK_SPEED;
   const events = [];
-  let gi = 0, ci = 0, si = 0, ti = 0, n = 0;
-  for (let t = 3; t < minutes * 0.85; t += interval, n++) {
-    const pool = n % 3 === 1 ? [couple, ci++] : n % 4 === 2 && seas.length ? [seas, si++] : [general, gi++];
-    events.push({ at: t * 60, kind: "mission", text: pool[0][pool[1] % pool[0].length] });
-    if (topics && t + interval / 2 < minutes * 0.85) events.push({ at: (t + interval / 2) * 60, kind: "topic", text: tps[ti++ % tps.length] });
+  for (let at = 250, n = 0; at < total * 0.82; at += step, n++) {
+    // 寄り道先の手前・直後とは重ならないようにする
+    if (stopAlong != null && Math.abs(at - stopAlong) < 150) continue;
+    let m;
+    if (n > 0 && r() < 0.12 && rare.length) {
+      const x = rare.pop(); m = { mode: x.mode, text: x.text, pts: 3, rare: true };
+    } else {
+      const mode = order[n % order.length];
+      used[mode] = (used[mode] || 0) + 1;
+      m = { mode, text: pools[mode][(used[mode] - 1) % pools[mode].length], pts: 1 };
+    }
+    events.push({ at, ...m, id: "m" + n });
   }
+  events.push({ at: total * 0.88, ...MISSIONS.final, id: "final" });
   return events;
 }
 
 // ---------- 散歩中 ----------
-let walkMap, walkRouteLine, walkTrackLine, walkMe, wakeLock = null;
-
-async function keepAwake() {
-  try { if ("wakeLock" in navigator) wakeLock = await navigator.wakeLock.request("screen"); } catch {}
-}
-document.addEventListener("visibilitychange", () => { if (walk && document.visibilityState === "visible") keepAwake(); });
+let walkMap, walkRouteLine, walkTrackLine, walkMe;
 
 function startWalk(sim) {
-  unlockAudio();
   const route = plan.route;
-  const startPos = plan.home;
   walk = {
-    id: "w" + Date.now(), startedAt: Date.now(), sim, route,
+    id: "w" + Date.now(), startedAt: Date.now(), sim, route, seed: plan.seed,
     stopName: plan.chosen && plan.stop !== "none" ? plan.chosen.name : null,
     stopMission: STOP_TYPES[plan.stop].mission || null,
-    progress: 0, announced: new Set(), track: [startPos], walked: 0, clock: 0, lastTick: performance.now(),
-    events: missionPlan(plan.seed, plan.minutes, plan.interval, plan.topics), eventIdx: 0,
-    current: null, photos: 0, missionsDone: 0, stopArrived: false, resting: false, finalDone: false,
-    off: 0, lastOffWarn: 0, pos: startPos, simAlong: 0, done: false,
+    progress: 0, track: [plan.home], pos: plan.home, lastFixAt: Date.now(),
+    events: missionPlan(plan.seed, route.total, plan.interval, route.stopAlong), eventIdx: 0,
+    inbox: [], results: [], me: 0, you: 0, photos: 0,
+    stopArrived: false, resting: false, restMs: 0, restStart: 0, off: 0, simAlong: 0, done: false,
   };
+  buzz(100);
+  resumeWalkSession();
+}
+
+// 散歩画面を開き、位置の取得を始める（再読み込みからの復帰でも使う）
+function resumeWalkSession() {
   showView("walk");
-  $("#simBadge").hidden = !sim;
+  $("#simBadge").hidden = !walk.sim;
   if (!walkMap) {
     walkMap = makeMap($("#walkMap"));
     walkRouteLine = L.polyline([], { color: ACCENT(), weight: 6, opacity: 0.75 }).addTo(walkMap);
     walkTrackLine = L.polyline([], { color: AMBER(), weight: 5 }).addTo(walkMap);
-    walkMe = L.circleMarker(startPos, dot(AMBER(), 9)).addTo(walkMap);
+    walkMe = L.circleMarker(walk.pos, dot(AMBER(), 9)).addTo(walkMap);
   }
-  walkRouteLine.setLatLngs(route.coords); walkTrackLine.setLatLngs([startPos]); walkMe.setLatLng(startPos);
-  setTimeout(() => { walkMap.invalidateSize(); walkMap.setView(startPos, 16); }, 50);
-  hideCards();
-  keepAwake();
+  walkRouteLine.setLatLngs(walk.route.coords); walkTrackLine.setLatLngs(walk.track); walkMe.setLatLng(walk.pos);
+  setTimeout(() => { walkMap.invalidateSize(); walkMap.setView(walk.pos, 16); }, 50);
+  $("#restCard").hidden = !walk.resting;
+  if (walk.resting) $("#restText").textContent = `${walk.stopName}で休憩中です。`;
+  renderInbox(); renderScore();
 
-  const stopMsg = walk.stopName ? `途中で${walk.stopName}に寄ります。` : "";
-  speak(`ふたり散歩を始めます。約${fmtKm(route.total)}キロ、${Math.round(route.total / WALK_SPEED / 60)}分のコースです。${stopMsg}スマホはしまって、曲がり角とお題は音声で案内します。いってらっしゃい。`);
-
-  if (sim) {
-    walk.simTimer = setInterval(simStep, 500);
-  } else {
-    walk.watch = navigator.geolocation.watchPosition((p) => {
-      if (p.coords.accuracy > 60) return;
-      onPosition([p.coords.latitude, p.coords.longitude]);
-    }, () => toast("現在地を取得できません。位置情報の許可を確認してください"), { enableHighAccuracy: true, maximumAge: 2000 });
-  }
-  walk.tick = setInterval(tick, 1000);
+  if (walk.sim) { walk.simAlong = Math.max(walk.simAlong, walk.progress); walk.simTimer = setInterval(simStep, 500); }
+  else startWatch();
+  walk.tick = setInterval(updateWalkUI, 5000);
   updateWalkUI();
+}
+
+function startWatch() {
+  if (walk.watch != null) navigator.geolocation.clearWatch(walk.watch);
+  walk.watch = navigator.geolocation.watchPosition((p) => {
+    if (p.coords.accuracy > 60) return;
+    onPosition([p.coords.latitude, p.coords.longitude]);
+  }, () => toast("現在地を取得できません。位置情報の許可を確認してください"), { enableHighAccuracy: true, maximumAge: 2000 });
+}
+
+// 画面を閉じて開き直したら、すぐに現在地を取り直す
+document.addEventListener("visibilitychange", () => {
+  if (!walk || walk.done || document.visibilityState !== "visible") return;
+  if (!walk.sim) { startWatch(); getPosition().then(onPosition).catch(() => {}); }
+  if (walkMap) walkMap.invalidateSize();
+  updateWalkUI();
+});
+
+function saveActive() {
+  if (!walk) return;
+  const { tick, simTimer, watch, ...data } = walk;
+  store.set("active", data);
 }
 
 function pointAt(route, along) {
@@ -494,22 +494,27 @@ function simStep() {
   onPosition(pointAt(walk.route, walk.simAlong));
 }
 
-function tick() {
-  const now = performance.now(), dt = (now - walk.lastTick) / 1000;
-  walk.lastTick = now;
-  if (!walk.resting) walk.clock += dt * (walk.sim ? SIM_SPEED : 1);
-  walk.walked += dt;
-  const ev = walk.events[walk.eventIdx];
-  if (ev && walk.clock >= ev.at && !walk.resting) {
-    walk.eventIdx++;
-    if (ev.kind === "mission") presentMission(ev.text);
-    else presentTopic(ev.text);
+// ルート上のどこにいるか。しばらく位置が取れていなかったときは先の方まで探す
+function locate(p, wide) {
+  const { coords, cum } = walk.route;
+  const from = walk.progress - 60, to = wide ? Infinity : walk.progress + 400;
+  let best = { d: Infinity, along: walk.progress }, firstNear = null;
+  for (let i = 1; i < coords.length; i++) {
+    if (cum[i] < from) continue;
+    if (cum[i - 1] > to) break;
+    const pr = project(p, coords[i - 1], coords[i]);
+    const along = cum[i - 1] + (cum[i] - cum[i - 1]) * pr.t;
+    if (pr.d < best.d) best = { d: pr.d, along };
+    // 行きと帰りで同じ道を通るときは、手前の方を採用する
+    if (wide && !firstNear && pr.d < 45) firstNear = { d: pr.d, along };
   }
-  updateWalkUI();
+  return firstNear || best;
 }
 
 function onPosition(p) {
   if (!walk || walk.done) return;
+  const gap = Date.now() - walk.lastFixAt > 20000;
+  walk.lastFixAt = Date.now();
   walk.pos = p;
   const last = walk.track[walk.track.length - 1];
   if (dist(last, p) > 5) { walk.track.push(p); walkTrackLine.addLatLng(p); }
@@ -518,89 +523,101 @@ function onPosition(p) {
 
   // 休憩中は、お店から離れたら自動で再開
   if (walk.resting) {
-    if (dist(p, walk.route.waypoints[walk.route.stopIndex]) > 80) resumeWalk();
+    if (dist(p, walk.route.waypoints[walk.route.stopIndex]) > 80) resumeFromRest();
+    saveActive();
     return;
   }
 
-  // ルート上のどこにいるか（行き帰りで同じ道を通っても飛ばないよう、今の位置の近くだけ探す）
-  const { coords, cum } = walk.route;
-  let best = { d: Infinity, along: walk.progress };
-  for (let i = 1; i < coords.length; i++) {
-    if (cum[i] < walk.progress - 60) continue;
-    if (cum[i - 1] > walk.progress + 400) break;
-    const pr = project(p, coords[i - 1], coords[i]);
-    if (pr.d < best.d) best = { d: pr.d, along: cum[i - 1] + (cum[i] - cum[i - 1]) * pr.t };
-  }
+  const best = locate(p, gap);
   if (best.d < 45) {
     walk.off = 0; $("#offRoute").hidden = true;
     if (best.along > walk.progress) walk.progress = best.along;
   } else if (++walk.off >= 3) {
     $("#offRoute").hidden = false;
-    if (Date.now() - walk.lastOffWarn > 60000) {
-      walk.lastOffWarn = Date.now();
-      chime("turn"); speak("ルートから少し外れているようです。地図を確認してください。");
-    }
   }
 
-  // 曲がり角の案内
-  const prog = walk.progress;
-  walk.route.turns.forEach((t, i) => {
-    const ahead = t.along - prog;
-    if (ahead > 0 && ahead < 40 && !walk.announced.has(i)) {
-      walk.announced.add(i);
-      chime("turn");
-      buzz(t.right ? [250] : [150, 120, 150]);
-      speak(`${Math.max(10, Math.round(ahead / 10) * 10)}メートル先、${t.dir}${t.then ? "、すぐに" + t.then : ""}です。${t.name ? t.name + "へ。" : ""}`);
-    }
-  });
+  const r = walk.route, prog = walk.progress;
 
   // 寄り道先に到着
-  const r = walk.route;
   if (r.stopAlong != null && !walk.stopArrived && prog >= r.stopAlong - 25) arriveStop();
 
-  // 最後のお題
-  if (!walk.finalDone && prog / r.total > 0.85 && walk.clock > 120) {
-    walk.finalDone = true;
-    presentMission(MISSIONS.final);
+  // 通り過ぎたお題をまとめて届ける（画面を閉じていた間の分も）
+  let arrived = 0;
+  while (walk.eventIdx < walk.events.length && walk.events[walk.eventIdx].at <= prog) {
+    walk.inbox.unshift({ ...walk.events[walk.eventIdx++], arrivedAt: Date.now() });
+    arrived++;
   }
+  if (arrived) { buzz([80, 60, 80, 60, 200]); renderInbox(); }
 
   // 帰宅
-  if (prog >= r.total - 25 && walk.clock > 60) finishWalk();
+  if (prog >= r.total - 25 && prog > r.total * 0.5) return finishWalk();
+  saveActive();
   updateWalkUI();
 }
 
 function arriveStop() {
-  walk.stopArrived = true; walk.resting = true;
+  walk.stopArrived = true; walk.resting = true; walk.restStart = Date.now();
   const pool = MISSIONS[walk.stopMission] || MISSIONS.stop;
-  const text = pool[Math.floor(rng(plan.seed ^ 77)() * pool.length)];
-  $("#restText").textContent = `${walk.stopName}に着きました。ゆっくり休憩してください。`;
+  pool.forEach((x, i) => walk.inbox.unshift({ ...x, pts: x.pts || 1, id: "s" + i, arrivedAt: Date.now() }));
+  $("#restText").textContent = `${walk.stopName}に着きました。ゆっくり休憩してください。お店のお題も届いています。`;
   $("#restCard").hidden = false;
-  chime("arrive");
-  speak(`${walk.stopName}に着きました。ゆっくり休憩してください。`);
-  setTimeout(() => presentMission(text), 1500);
-  if (walk.sim) setTimeout(() => walk && walk.resting && resumeWalk(), 6000);
+  buzz([200, 100, 200]);
+  renderInbox();
+  if (walk.sim) setTimeout(() => walk && walk.resting && resumeFromRest(), 6000);
 }
-function resumeWalk() {
+function resumeFromRest() {
   if (!walk.resting) return;
-  walk.resting = false; $("#restCard").hidden = true;
-  chime("arrive"); speak("では、帰り道に出発しましょう。");
+  walk.resting = false; walk.restMs += Date.now() - walk.restStart;
+  $("#restCard").hidden = true;
+  saveActive();
 }
 
-function presentMission(text) {
-  walk.current = text;
-  $("#missionText").textContent = text;
-  $("#missionCard").hidden = false;
-  chime("mission"); buzz([80, 60, 80, 60, 200]);
-  setTimeout(() => speak("お題です。" + text), 500);
+// ---------- お題カード ----------
+function renderInbox() {
+  const box = $("#inbox");
+  box.innerHTML = "";
+  walk.inbox.forEach((m) => {
+    const mode = MODES[m.mode];
+    const c = document.createElement("div");
+    c.className = `card mission${m.rare ? " rare" : ""}${mode.battle ? "" : " coop"}`;
+    c.innerHTML = `<div class="head"><span class="tag"></span><span class="ptsbadge"></span></div><p></p><div class="arrived"></div><div class="judge"></div>`;
+    c.querySelector(".tag").textContent = (m.rare ? "★ " : "") + mode.label;
+    c.querySelector(".ptsbadge").textContent = mode.battle ? `勝つと${m.pts}ポイント` : "勝ち負けなし";
+    c.querySelector("p").textContent = m.text;
+    c.querySelector(".arrived").textContent = `${fmtTime(m.arrivedAt)}に届きました`;
+    const j = c.querySelector(".judge");
+    const btn = (label, cls, fn) => { const b = document.createElement("button"); b.textContent = label; b.className = cls; b.onclick = fn; j.appendChild(b); };
+    if (mode.shoot) btn("撮る", "ghost", () => shoot(m));
+    if (mode.battle) {
+      btn("わたしの勝ち", "winme", () => resolve(m, "me"));
+      btn("あいての勝ち", "winyou", () => resolve(m, "you"));
+      btn("引き分け", "ghost draw", () => resolve(m, "draw"));
+      btn("やめておく", "ghost skip", () => resolve(m, "skip"));
+    } else {
+      btn("できた", "winme", () => resolve(m, "done"));
+      btn("やめておく", "ghost skip", () => resolve(m, "skip"));
+    }
+    box.appendChild(c);
+  });
+  updateWalkUI();
 }
-function presentTopic(text) {
-  $("#topicText").textContent = text;
-  $("#topicCard").hidden = false;
-  speak("話題をひとつ。" + text);
-  clearTimeout(walk.topicTimer);
-  walk.topicTimer = setTimeout(() => ($("#topicCard").hidden = true), 120000);
+
+function resolve(m, outcome) {
+  walk.inbox = walk.inbox.filter((x) => x.id !== m.id);
+  walk.results.push({ id: m.id, mode: m.mode, text: m.text, pts: m.pts, outcome });
+  if (outcome === "me") walk.me += m.pts;
+  if (outcome === "you") walk.you += m.pts;
+  if (outcome === "me" || outcome === "you") bump(outcome);
+  if (outcome === "me") toast(`わたしに${m.pts}ポイント！`);
+  else if (outcome === "you") toast(`あいてに${m.pts}ポイント`);
+  else if (outcome === "done") toast("ナイス！");
+  renderInbox(); renderScore(); saveActive();
 }
-function hideCards() { ["#missionCard", "#topicCard", "#restCard", "#offRoute"].forEach((s) => ($(s).hidden = true)); }
+function renderScore() { $("#scoreMe").textContent = walk.me; $("#scoreYou").textContent = walk.you; }
+function bump(who) {
+  const el = $(who === "me" ? "#scoreMe" : "#scoreYou");
+  el.classList.remove("bump"); void el.offsetWidth; el.classList.add("bump");
+}
 
 function updateWalkUI() {
   if (!walk) return;
@@ -609,16 +626,19 @@ function updateWalkUI() {
   if (walk.resting) {
     $("#nextArrow").textContent = "☕"; $("#nextText").textContent = "休憩中"; $("#nextSub").textContent = walk.stopName || "";
   } else if (next) {
-    const ahead = next.along - prog;
     $("#nextArrow").textContent = next.arrow;
-    $("#nextText").textContent = `${Math.round(ahead / 10) * 10}m先 ${next.dir}`;
+    $("#nextText").textContent = `${fmtDist(next.along - prog)}先 ${next.dir}`;
     $("#nextSub").textContent = [next.then ? `すぐに${next.then}` : "", next.name ? `${next.name}へ` : ""].filter(Boolean).join("・");
   } else {
     $("#nextArrow").textContent = "⌂"; $("#nextText").textContent = "このまま家へ"; $("#nextSub").textContent = "";
   }
   $("#statRemain").textContent = `${fmtKm(Math.max(0, r.total - prog))}km`;
-  $("#statTime").textContent = `${Math.floor(walk.clock / 60)}分`;
+  const elapsed = (Date.now() - walk.startedAt) * (walk.sim ? SIM_SPEED : 1);
+  $("#statTime").textContent = `${Math.floor(elapsed / 60000)}分`;
   $("#statPhotos").textContent = `${walk.photos}枚`;
+  const ev = walk.events[walk.eventIdx];
+  $("#inboxEmpty").hidden = walk.inbox.length > 0 || !ev;
+  if (ev) $("#nextMissionIn").textContent = fmtDist(ev.at - prog);
 }
 
 async function reroute() {
@@ -631,10 +651,17 @@ async function reroute() {
   $("#btnReroute").disabled = true;
   try {
     const nr = shapeRoute(await osrm(pts), pts, stopIndex);
-    walk.route = nr; walk.progress = 0; walk.announced = new Set(); walk.simAlong = 0; walk.off = 0;
+    // まだ届いていないお題は、新しい道の上で同じ順番に並べ直す
+    const remaining = walk.events.slice(walk.eventIdx);
+    const shift = remaining.length ? remaining[0].at - walk.progress : 0;
+    const step = remaining.length > 1 ? remaining[1].at - remaining[0].at : 0;
+    remaining.forEach((e, i) => (e.at = Math.min(nr.total * 0.9, Math.max(50, shift) + step * i)));
+    walk.events = remaining; walk.eventIdx = 0;
+    walk.route = nr; walk.progress = 0; walk.simAlong = 0; walk.off = 0;
     walkRouteLine.setLatLngs(nr.coords);
     $("#offRoute").hidden = true;
-    speak("ここからの道を引き直しました。");
+    toast("ここからの道を引き直しました");
+    saveActive(); updateWalkUI();
   } catch (e) { toast(e.message); }
   finally { $("#btnReroute").disabled = false; }
 }
@@ -644,23 +671,25 @@ async function finishWalk(early) {
   walk.done = true;
   clearInterval(walk.tick); clearInterval(walk.simTimer);
   if (walk.watch != null) navigator.geolocation.clearWatch(walk.watch);
-  try { wakeLock && wakeLock.release(); } catch {}
   const w = walk;
+  const elapsed = (Date.now() - w.startedAt - w.restMs) * (w.sim ? SIM_SPEED : 1);
   const record = {
-    id: w.id, startedAt: w.startedAt, endedAt: Date.now(), minutes: Math.round(w.clock / 60),
+    id: w.id, startedAt: w.startedAt, endedAt: Date.now(), minutes: Math.round(elapsed / 60000),
     distance: Math.round(early ? w.progress : w.route.total), stopName: w.stopName,
-    route: w.route.coords.filter((_, i) => i % 3 === 0), track: w.track, photos: w.photos, missionsDone: w.missionsDone, sim: w.sim,
+    route: w.route.coords.filter((_, i) => i % 3 === 0), track: w.track, photos: w.photos,
+    me: w.me, you: w.you, results: w.results,
+    penalty: PENALTIES[Math.floor(rng(w.seed ^ 99)() * PENALTIES.length)], sim: w.sim,
   };
   await putWalk(record);
-  chime("arrive");
-  speak(early ? "おつかれさまでした。散歩を記録しました。" : `おかえりなさい。今日は${fmtKm(record.distance)}キロ歩いて、写真を${w.photos}枚撮りました。アルバムで振り返ってみましょう。`, { interrupt: early });
+  store.del("active");
+  buzz([200, 100, 200, 100, 400]);
   walk = null;
   openDetail(record.id);
 }
 
 // ---------- 写真 ----------
 let photoFor = null;
-function shoot(missionText) { photoFor = missionText; $("#photoInput").value = ""; $("#photoInput").click(); }
+function shoot(m) { photoFor = m; $("#photoInput").value = ""; $("#photoInput").click(); }
 async function resize(file, max = 1600) {
   const img = await createImageBitmap(file).catch(() => null);
   if (!img) return file;
@@ -674,14 +703,10 @@ async function onPhoto(e) {
   const file = e.target.files && e.target.files[0];
   if (!file || !walk) return;
   const blob = await resize(file);
-  await addPhoto({ walkId: walk.id, blob, mission: photoFor, pos: walk.pos, at: Date.now() });
+  await addPhoto({ walkId: walk.id, blob, mission: photoFor ? photoFor.text : null, pos: walk.pos, at: Date.now() });
   walk.photos++;
-  if (photoFor && photoFor === walk.current) {
-    walk.missionsDone++; walk.current = null; $("#missionCard").hidden = true;
-    speak("いい写真ですね。お題クリアです。");
-  }
-  toast("写真を保存しました");
-  updateWalkUI();
+  toast(photoFor && MODES[photoFor.mode].battle ? "保存しました。見せ合って勝敗を決めよう" : "写真を保存しました");
+  saveActive(); updateWalkUI();
 }
 
 // ---------- アルバム ----------
@@ -694,7 +719,14 @@ async function renderAlbum() {
   const box = $("#albumList");
   const walks = (await allWalks()).sort((a, b) => b.startedAt - a.startedAt);
   box.innerHTML = "";
-  if (!walks.length) { box.innerHTML = '<p class="empty">まだ散歩の記録はありません。<br>最初の散歩に出かけると、ここに写真と道のりが残ります。</p>'; return; }
+  const real = walks.filter((w) => !w.sim && w.me != null);
+  $("#albumTotal").hidden = !real.length;
+  if (real.length) {
+    const wins = real.filter((w) => w.me > w.you).length, loses = real.filter((w) => w.me < w.you).length;
+    $("#albumTotal").innerHTML = `<span class="muted">通算成績（${real.length}回）</span><b></b>`;
+    $("#albumTotal b").textContent = `${wins}勝 ${loses}敗 ${real.length - wins - loses}分`;
+  }
+  if (!walks.length) { box.innerHTML = '<p class="empty">まだ散歩の記録はありません。<br>最初の散歩に出かけると、ここに写真と勝負の結果が残ります。</p>'; return; }
   for (const w of walks) {
     const ps = await photosOf(w.id);
     const b = document.createElement("button");
@@ -702,7 +734,8 @@ async function renderAlbum() {
     b.innerHTML = '<div class="thumb"></div><div><div class="t"></div><div class="m"></div></div>';
     if (ps[0]) b.querySelector(".thumb").style.backgroundImage = `url(${blobUrl(ps[0].blob)})`;
     b.querySelector(".t").textContent = `${fmtDate(w.startedAt)}${w.stopName ? "・" + w.stopName : ""}`;
-    b.querySelector(".m").textContent = `${fmtKm(w.distance)}km ・ ${w.minutes}分 ・ 写真${ps.length}枚${w.sim ? " ・ 試し" : ""}`;
+    const score = w.me != null ? ` ・ ${w.me}対${w.you}` : "";
+    b.querySelector(".m").textContent = `${fmtKm(w.distance)}km ・ ${w.minutes}分${score} ・ 写真${ps.length}枚${w.sim ? " ・ 試し" : ""}`;
     b.onclick = () => openDetail(w.id);
     box.appendChild(b);
   }
@@ -714,7 +747,14 @@ async function openDetail(id) {
   releaseUrls();
   const w = await getWalk(id), ps = await photosOf(id);
   $("#detailTitle").textContent = `${fmtDate(w.startedAt)}の散歩`;
-  $("#detailMeta").textContent = `${fmtTime(w.startedAt)}〜${fmtTime(w.endedAt)} ・ ${fmtKm(w.distance)}km${w.stopName ? " ・ " + w.stopName + "に寄り道" : ""} ・ お題クリア${w.missionsDone}個`;
+  $("#detailMeta").textContent = `${fmtTime(w.startedAt)}〜${fmtTime(w.endedAt)} ・ ${fmtKm(w.distance)}km${w.stopName ? " ・ " + w.stopName + "に寄り道" : ""}`;
+  $("#detailResult").hidden = w.me == null;
+  if (w.me != null) {
+    const head = w.me > w.you ? "わたしの勝ち！" : w.me < w.you ? "あいての勝ち！" : "引き分け！";
+    $("#resultHead").textContent = head;
+    $("#resultScore").textContent = `${w.me} - ${w.you}`;
+    $("#resultPenalty").textContent = w.me === w.you ? "今日は引き分け。仲良く何かおいしいものを食べよう" : w.penalty;
+  }
   if (!detailMap) { detailMap = makeMap($("#detailMap")); detailLayer = L.layerGroup().addTo(detailMap); }
   detailLayer.clearLayers();
   setTimeout(() => {
@@ -772,8 +812,6 @@ function init() {
   bindSeg("segTime", "minutes", resetRoute);
   bindSeg("segStop", "stop", resetRoute);
   bindSeg("segInterval", "interval");
-  $("#chkTopics").checked = plan.topics;
-  $("#chkTopics").onchange = (e) => { plan.topics = e.target.checked; store.set("topics", plan.topics); };
 
   $("#btnHere").onclick = async () => {
     $("#btnHere").disabled = true;
@@ -786,11 +824,8 @@ function init() {
   $("#btnStart").onclick = () => startWalk(false);
   $("#btnSim").onclick = () => startWalk(true);
 
-  $("#btnShoot").onclick = () => shoot(walk.current);
-  $("#btnSkip").onclick = () => { walk.current = null; $("#missionCard").hidden = true; };
   $("#btnFree").onclick = () => shoot(null);
-  $("#btnRepeat").onclick = () => lastSpoken && speak(lastSpoken, { interrupt: true });
-  $("#btnResume").onclick = resumeWalk;
+  $("#btnResume").onclick = resumeFromRest;
   $("#btnReroute").onclick = reroute;
   let endArmed = 0;
   $("#btnEnd").onclick = () => {
@@ -803,6 +838,15 @@ function init() {
   $("#btnBack").onclick = () => showView("album");
   $$("#tabs button").forEach((b) => b.onclick = () => showView(b.dataset.tab));
 
+  // 散歩の途中でページが読み込み直されたら、続きから再開する
+  const active = store.get("active", null);
+  if (active && Date.now() - active.startedAt < 6 * 3600e3) {
+    walk = { ...active, lastFixAt: 0 };
+    resumeWalkSession();
+    toast("散歩の続きから再開しました");
+    return;
+  }
+  store.del("active");
   loadShared();
 }
 init();
