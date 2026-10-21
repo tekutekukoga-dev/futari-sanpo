@@ -437,3 +437,8 @@ input[type="range"] { accent-color: var(--fg); }
 .letterbox textarea { resize: none; }
 .partner { min-width: 30px; height: 30px; padding: 0 4px; display: grid; place-items: center; background: #111; color: #fff; font-size: 11px; font-weight: 500; border: 2px solid #fff; }
 .kind.letter { color: var(--accent); }
+/* 選ばれている候補（寄り道先・合流場所）：薄い青の地と左の線、右に「選択中」 */
+.candidates button.on { background: var(--accent-soft); color: var(--fg); box-shadow: inset 3px 0 0 var(--accent); padding-left: 10px; padding-right: 8px; font-weight: 500; }
+.candidates button.on::before { content: none; }
+.candidates button.on .d::before { content: "選択中 ・ "; color: var(--accent); font-family: var(--font); font-weight: 600; letter-spacing: .02em; }
+.candidates button:not(.on) { padding-left: 10px; padding-right: 8px; }
