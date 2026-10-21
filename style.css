@@ -118,7 +118,7 @@ button:disabled { opacity: .5; cursor: default; }
 .chip.warn { color: var(--warn); }
 .chip.night { background: var(--night); color: #fff; }
 
-.mapwrap { position: relative; flex: 1; overflow: hidden; background: #e8ece8; }
+.mapwrap { position: relative; flex: 1; min-height: 120px; overflow: hidden; background: #e8ece8; }
 #walkMap { position: absolute; left: 50%; top: 50%; transform-origin: 50% 50%; will-change: transform; }
 .mapbtns { position: absolute; z-index: 600; right: max(12px, env(safe-area-inset-right, 0px)); top: 48px; display: flex; flex-direction: column; gap: 8px; }
 .fab {
@@ -130,16 +130,16 @@ button:disabled { opacity: .5; cursor: default; }
 .sheet {
   background: var(--surface); border-radius: 18px 18px 0 0; box-shadow: 0 -2px 12px rgb(0 0 0 / .1);
   padding: 14px max(16px, env(safe-area-inset-right, 0px)) calc(10px + env(safe-area-inset-bottom, 0px)) max(16px, env(safe-area-inset-left, 0px));
-  display: flex; flex-direction: column; gap: 10px; max-height: 52%; overflow-y: auto;
+  display: flex; flex-direction: column; gap: 10px; max-height: 64%; overflow-y: auto; flex: none;
 }
-.card { display: flex; flex-direction: column; gap: 10px; }
+.card { display: flex; flex-direction: column; gap: 10px; flex: none; }
 .card p { margin: 0; font-size: 19px; line-height: 1.5; font-weight: 600; }
 .card.idle p { font-size: 15px; font-weight: 400; }
 .cardhead { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
 .kind { font-size: 13px; font-weight: 700; color: var(--accent); letter-spacing: .04em; }
 .kind.talk { color: #8a5a00; }
 @media (prefers-color-scheme: dark) { .kind.talk { color: #f0c26b; } }
-.card .actions > * { flex: 1 1 0; }
+.card .actions > * { flex: 1 1 0; white-space: nowrap; padding: 10px 6px; }
 .sheetfoot { display: flex; align-items: center; gap: 10px; border-top: 1px solid var(--line); padding-top: 8px; }
 .thumbs { display: flex; gap: 6px; overflow-x: auto; flex: 1; min-width: 0; }
 .thumbs button { flex: none; width: 40px; height: 40px; border-radius: 8px; background: var(--line) center/cover; }
