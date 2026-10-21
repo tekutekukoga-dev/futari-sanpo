@@ -610,9 +610,10 @@ function renderCandidates() {
 }
 function chooseCandidate(c) { plan.chosen = c; renderCandidates(); buildRoute(); }
 
-async function osrm(points) {
+// straight: 経由地でUターンさせず、通り抜けさせる（行き止まりの往復を減らす）
+async function osrm(points, straight) {
   const coords = points.map((p) => `${p[1].toFixed(6)},${p[0].toFixed(6)}`).join(";");
-  const res = await fetch(`${OSRM}${coords}?overview=full&geometries=geojson&steps=true`, { signal: AbortSignal.timeout(15000) }).catch(() => null);
+  const res = await fetch(`${OSRM}${coords}?overview=full&geometries=geojson&steps=true&continue_straight=${straight ? "true" : "false"}`, { signal: AbortSignal.timeout(15000) }).catch(() => null);
   if (!res) throw new Error("ルートを作れませんでした。電波の良いところでもう一度お試しください");
   if (!res.ok) throw new Error("ルートを作れませんでした。少し待ってからもう一度お試しください");
   const data = await res.json();
@@ -662,33 +663,60 @@ function turnText(step) {
   return { dir: d[0], arrow: d[1], name: step.name || "" };
 }
 
+// 同じ道を往復している割合（0〜1）。15mおきに点を取り、80m以上前に通った場所の12m以内に戻っていたら往復とみなす。
+// 自宅と寄り道先のまわりは、行き帰りで同じ道になっても仕方ないので数えない
+function overlapRatio(route, ignore = []) {
+  const step = 15, samples = [];
+  for (let a = 0; a < route.total; a += step) samples.push([a, pointAt(route, a)]);
+  let over = 0;
+  for (let i = 0; i < samples.length; i++) {
+    const [a, p] = samples[i];
+    if (ignore.some((q) => dist(p, q) < 120)) continue;
+    for (let j = 0; j < i && samples[j][0] < a - 80; j++) {
+      if (dist(p, samples[j][1]) < 12) { over++; break; }
+    }
+  }
+  return (over * step) / route.total;
+}
+
 async function buildRoute() {
   if (!plan.home) return showPlanError("先に自宅を設定してください");
   showPlanError("");
   $("#btnMake").disabled = true; $("#btnMake").textContent = "ルートを作っています…";
   try {
-    const r = rng(plan.seed), home = plan.home, rad0 = legRadius();
-    let wps, stopIndex = null;
+    const r = rng(plan.seed), home = plan.home, rad0 = legRadius(), target = loopMeters();
+    // 経由地の置き方を何通りか試す。寄り道先があるときは、左回り・右回りと、寄る順番を入れ替える
+    let shapes, stopAt = null;
     if (plan.stop !== "none" && plan.chosen) {
-      const c = plan.chosen.pos, b = bearing(home, c), dc = dist(home, c), side = r() < 0.5 ? 60 : -60;
-      wps = (f) => [home, c, dest(home, b + side, dc * 0.95 * f), home];
-      stopIndex = 1;
+      const c = plan.chosen.pos, b = bearing(home, c), dc = dist(home, c), first = r() < 0.5 ? 60 : -60;
+      stopAt = c;
+      shapes = [first, -first, first * 0.6, -first * 0.6].flatMap((side) => [
+        { stopIndex: 1, wps: (f) => [home, c, dest(home, b + side, dc * 0.95 * f), home] },
+        { stopIndex: 2, wps: (f) => [home, dest(home, b + side, dc * 0.95 * f), c, home] },
+      ]).slice(0, 5);
     } else {
       const θ = r() * 360;
-      wps = (f) => [home, dest(home, θ, rad0 * f), dest(home, θ + 60, rad0 * f), home];
+      shapes = [0, 90, 180, 270, 45].map((turn) => ({
+        stopIndex: null,
+        // 三角形より丸に近い周回になるよう、経由地を3つ置く
+        wps: (f) => [home, dest(home, θ + turn - 25, rad0 * 0.95 * f), dest(home, θ + turn + 35, rad0 * 1.05 * f), dest(home, θ + turn + 95, rad0 * 0.85 * f), home],
+      }));
     }
-    // 距離が目標から15%以上ずれたら、経由地の距離を変えて最大3回作り直し、いちばん近いものを使う
-    const target = loopMeters();
-    let f = 1, pts = wps(f), route = await osrm(pts), best = { route, pts };
-    for (let i = 0; i < 3; i++) {
-      const ratio = target / route.distance;
-      if (Math.abs(ratio - 1) < 0.15) break;
-      f = Math.max(0.1, Math.min(2.5, f * (stopIndex ? 1 + (ratio - 1) * 1.6 : ratio)));
-      pts = wps(f);
-      route = await osrm(pts);
-      if (Math.abs(route.distance - target) < Math.abs(best.route.distance - target)) best = { route, pts };
+    // 経由地でUターンさせずにルートを作り、「同じ道の往復の少なさ」と「目標の距離への近さ」で点数をつける。
+    // 1本目の結果から距離の倍率を学んで、2本目以降に使う
+    const ignore = [home, ...(stopAt ? [stopAt] : [])];
+    let f = 1, best = null;
+    for (let i = 0; i < shapes.length; i++) {
+      const sh = shapes[i], pts = sh.wps(f);
+      let route;
+      try { route = shapeRoute(await osrm(pts, true), pts, sh.stopIndex); } catch (e) { if (i === 0 && !best) throw e; continue; }
+      const over = overlapRatio(route, ignore), off = Math.abs(route.total - target) / target;
+      const score = over * 2 + off;
+      if (!best || score < best.score) best = { route, score, over, off };
+      if (i === 0) f = Math.max(0.2, Math.min(2.5, f * (stopAt ? 1 + (target / route.total - 1) * 1.6 : target / route.total)));
+      if (over < 0.03 && off < 0.12) break;
     }
-    plan.route = shapeRoute(best.route, best.pts, stopIndex);
+    plan.route = best.route;
     showSummary();
     await drawPlan();
     loadPois(plan.route);
