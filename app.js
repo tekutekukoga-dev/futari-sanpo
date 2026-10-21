@@ -452,6 +452,7 @@ function drawPois(m, pois, bucket) {
 function showPoi(m, p) {
   const box = mkEl("poipop");
   box.append(mkEl("poiname", p.name), mkEl("poilabel", `${POI_GROUPS[p.group].label}・${p.label}`));
+  const g = document.createElement("a"); g.href = gmapUrl(p.name, p.pos); g.target = "_blank"; g.rel = "noopener"; g.textContent = "Googleマップで見る"; box.append(g);
   if (p.wiki) { const a = document.createElement("a"); a.href = p.wiki; a.target = "_blank"; a.rel = "noopener"; a.textContent = "Wikipediaで読む"; box.append(a); }
   const popup = new maplibregl.Popup({ offset: 16, closeButton: false, maxWidth: "240px" });
   // ルートから少し離れた場所なら、そこを通るように道を引き直せる
@@ -615,18 +616,31 @@ async function findCandidates(type) {
     .slice(0, 6);
 }
 
+// Googleマップで、その場所の周りを店名で探すリンク（写真や口コミを確かめられる）
+const gmapUrl = (name, pos) => `https://www.google.com/maps/search/${encodeURIComponent(name)}/@${pos[0].toFixed(6)},${pos[1].toFixed(6)},18z`;
+// 候補の1行：選ぶボタンと、Googleマップのリンクを横に並べる
+function candidateRow(c, on, typeLabel, onPick) {
+  const row = document.createElement("div");
+  row.className = "candrow" + (on ? " on" : "");
+  const b = document.createElement("button");
+  b.className = on ? "on" : "";
+  b.innerHTML = `<span></span><span class="d">${typeLabel ? typeLabel + "・" : ""}家から${fmtKm(c.d)}km</span>`;
+  b.firstChild.textContent = c.name;
+  b.onclick = onPick;
+  const a = document.createElement("a");
+  a.className = "gmap"; a.href = gmapUrl(c.name, c.pos); a.target = "_blank"; a.rel = "noopener";
+  a.textContent = "地図"; a.setAttribute("aria-label", `${c.name}をGoogleマップで見る`);
+  row.append(b, a);
+  return row;
+}
+
 function renderCandidates() {
   const box = $("#candidates");
   box.innerHTML = "";
   if (plan.stop === "none") return;
   if (!plan.candidates.length) return;
   plan.candidates.forEach((c) => {
-    const b = document.createElement("button");
-    b.className = plan.chosen && plan.chosen.id === c.id ? "on" : "";
-    b.innerHTML = `<span></span><span class="d">${plan.stop === "any" ? STOP_TYPES[c.type].label + "・" : ""}家から${fmtKm(c.d)}km</span>`;
-    b.firstChild.textContent = c.name;
-    b.onclick = () => chooseCandidate(c);
-    box.appendChild(b);
+    box.appendChild(candidateRow(c, plan.chosen && plan.chosen.id === c.id, plan.stop === "any" ? STOP_TYPES[c.type].label : "", () => chooseCandidate(c)));
   });
 }
 function chooseCandidate(c) { plan.chosen = c; renderCandidates(); buildRoute(); }
@@ -942,12 +956,7 @@ function renderMeetCands() {
   const box = $("#meetCands");
   box.innerHTML = "";
   plan.meetCands.forEach((c) => {
-    const b = document.createElement("button");
-    b.className = plan.meetChosen && plan.meetChosen.id === c.id ? "on" : "";
-    b.innerHTML = `<span></span><span class="d">${plan.meet === "any" ? STOP_TYPES[c.type].label + "・" : ""}家から${fmtKm(c.d)}km</span>`;
-    b.firstChild.textContent = c.name;
-    b.onclick = () => { plan.meetChosen = c; renderMeetCands(); buildRoute(); };
-    box.appendChild(b);
+    box.appendChild(candidateRow(c, plan.meetChosen && plan.meetChosen.id === c.id, plan.meet === "any" ? STOP_TYPES[c.type].label : "", () => { plan.meetChosen = c; renderMeetCands(); buildRoute(); }));
   });
 }
 
