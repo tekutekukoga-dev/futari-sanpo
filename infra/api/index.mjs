@@ -29,6 +29,8 @@ const json = (statusCode, body) => ({ statusCode, headers: { "content-type": "ap
 const fail = (status, message) => Object.assign(new Error(message), { status, expose: true });
 
 export const handler = async (event) => {
+  // ブラウザの事前確認には、中身なしで答える（許可のヘッダーは API Gateway が付ける）
+  if (event.requestContext?.http?.method === "OPTIONS") return { statusCode: 204, body: "" };
   const claims = event.requestContext?.authorizer?.jwt?.claims || {};
   const sub = claims.sub;
   if (!sub) return json(401, { error: "ログインしてください" });
