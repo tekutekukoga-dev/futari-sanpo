@@ -277,3 +277,18 @@ input[type="range"] { width: 100%; accent-color: var(--accent); height: 32px; ma
 .kind.split, .kind.choose { color: #7b4fa0; }
 .pin.meet { background: #7b4fa0; }
 .pin.fork { background: #4a5568; }
+
+/* ふたりのアルバム（夫婦用ページだけで表示） */
+.cloudbox { padding: 12px 16px; gap: 8px; }
+.cloudbox p { margin: 0; }
+.field { font: inherit; font-size: 16px; width: 100%; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; background: var(--bg); color: var(--fg); }
+.field:focus { outline: 2px solid var(--accent); border-color: transparent; }
+.joinrow { display: flex; gap: 8px; }
+.joinrow .field { flex: 1; min-width: 0; text-transform: uppercase; letter-spacing: .1em; }
+.invite { font-size: 28px; font-weight: 700; letter-spacing: .18em; text-align: center; padding: 10px; border-radius: 12px; background: var(--accent-soft); color: var(--accent); font-variant-numeric: tabular-nums; }
+.flabel { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
+.authfields { display: flex; flex-direction: column; gap: 10px; }
+.authlinks { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px 14px; }
+.logo .edition { font-family: var(--font); font-size: 12px; font-weight: 600; color: var(--muted); margin-left: 8px; letter-spacing: 0; vertical-align: middle; }
+.photos button[data-who] { position: relative; }
+.photos button[data-who]::after { content: attr(data-who); position: absolute; left: 4px; bottom: 4px; font-size: 10.5px; color: #fff; background: rgb(0 0 0 / .45); padding: 1px 6px; border-radius: 99px; }

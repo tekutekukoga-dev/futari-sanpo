@@ -1,1 +1,5 @@
 .claude/
+# 夫婦用の設定（公開しない）
+infra/allowed-emails.txt
+cloud-config.js
+dist-couple/

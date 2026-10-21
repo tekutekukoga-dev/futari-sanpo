@@ -924,7 +924,12 @@ async function prepareMeet() {
     if (plan.stop === "none" || !plan.chosen) { showPlanError("合流場所を「寄り道先」にするには、寄り道先を選んでください"); return false; }
     return true;
   }
-  plan.meetCands = (await findCandidates(plan.meet).catch(() => [])).filter((c) => !plan.chosen || c.id !== plan.chosen.id);
+  // おまかせ：神社・公園・史跡・景色のいい所をランダムな順に試して、見つかった種類を使う
+  const types = plan.meet === "any" ? shuffle(["shrine", "park", "historic", "viewpoint"], rng(plan.seed ^ 0x3c)) : [plan.meet];
+  for (const type of types) {
+    plan.meetCands = (await findCandidates(type).catch(() => [])).filter((c) => !plan.chosen || c.id !== plan.chosen.id);
+    if (plan.meetCands.length) break;
+  }
   plan.meetChosen = plan.meetCands[0] || null;
   renderMeetCands();
   if (!plan.meetChosen) { showPlanError("合流場所にちょうどいい場所が見つかりませんでした。合流場所の種類を変えてみてください"); return false; }
@@ -936,7 +941,7 @@ function renderMeetCands() {
   plan.meetCands.forEach((c) => {
     const b = document.createElement("button");
     b.className = plan.meetChosen && plan.meetChosen.id === c.id ? "on" : "";
-    b.innerHTML = `<span></span><span class="d">家から${fmtKm(c.d)}km</span>`;
+    b.innerHTML = `<span></span><span class="d">${plan.meet === "any" ? STOP_TYPES[c.type].label + "・" : ""}家から${fmtKm(c.d)}km</span>`;
     b.firstChild.textContent = c.name;
     b.onclick = () => { plan.meetChosen = c; renderMeetCands(); buildRoute(); };
     box.appendChild(b);
@@ -1508,12 +1513,12 @@ async function finishWalk(early) {
     id: w.id, startedAt: w.startedAt, endedAt: Date.now(), minutes: Math.round(elapsed / 60000),
     distance: Math.round(early ? w.progress : w.route.total), stopName: w.stopName,
     route: w.route.coords.filter((_, i) => i % 3 === 0), track: w.track, photos: w.photos,
-    results: w.results, sim: w.sim, night: !!w.night, theme: w.theme || null, weather: w.weather || null,
+    results: w.results, sim: w.sim, night: !!w.night, theme: w.theme || null, weather: w.weather || null, seed: w.seed,
     split: w.split ? { meetName: w.split.meetName, branch: w.branch } : null,
   };
   // この散歩で新しく取ったバッジと、上がった称号を記録しておく
   try {
-    const before = await allWalks();
+    const before = ownWalks(await allWalks());
     const s0 = badgeStats(before), s1 = badgeStats([...before, record]);
     const had = new Set(earnedBadges(s0));
     record.newBadges = earnedBadges(s1).filter((id) => !had.has(id));
@@ -1527,6 +1532,7 @@ async function finishWalk(early) {
   buzz([200, 100, 400]);
   walk = null;
   openDetail(record.id);
+  if (window.Cloud) Cloud.sync(true);
 }
 
 // ---------- 写真 ----------
@@ -1639,25 +1645,50 @@ function renderBadges(walks) {
   });
 }
 
+// 自分の散歩だけ（相手の端末から同期された散歩は、バッジや称号に数えない）
+const ownWalks = (walks) => walks.filter((w) => !w.fromCloud || (window.Cloud && w.owner === Cloud.myId()));
+// 二人がそれぞれ記録した同じ散歩（同じルートで、出発が45分以内）を1つにまとめる。自分の記録を先頭にする
+function groupWalks(walks) {
+  const groups = [];
+  walks.slice().sort((a, b) => b.startedAt - a.startedAt).forEach((w) => {
+    const g = groups.find((g) => w.seed != null && g.some((x) => x.seed === w.seed && x.owner !== w.owner && Math.abs(x.startedAt - w.startedAt) < 45 * 60000));
+    if (g) g.push(w); else groups.push([w]);
+  });
+  const mine = (w) => !w.fromCloud || (window.Cloud && w.owner === Cloud.myId());
+  return groups.map((g) => g.sort((a, b) => mine(b) - mine(a)));
+}
+async function photosOfGroup(group) {
+  const all = (await Promise.all(group.map((w) => photosOf(w.id)))).flat();
+  return all.sort((a, b) => a.at - b.at);
+}
+
 async function renderAlbum() {
   releaseUrls();
   const box = $("#albumList");
   const walks = (await allWalks()).sort((a, b) => b.startedAt - a.startedAt);
-  renderBadges(walks);
+  renderBadges(ownWalks(walks));
+  if (window.Cloud) {
+    Cloud.renderBox();
+    if (!renderAlbum.syncing) {
+      renderAlbum.syncing = true;
+      Cloud.sync().then((changed) => { renderAlbum.syncing = false; if (changed && !$("#view-album").hidden) renderAlbum(); });
+    }
+  }
   // ホーム画面に追加していないSafariでは、しばらく使わないと保存したデータが消されることがある
   const standalone = navigator.standalone || matchMedia("(display-mode: standalone)").matches;
   $("#backupHint").textContent = "写真と記録はこのスマホの中だけに保存されています。ときどき書き出しておくと安心です。" +
     (standalone ? "" : "Safariのままだと、しばらく使わないと消えることがあります。共有ボタンの「ホーム画面に追加」から使うのがおすすめです。");
   box.innerHTML = "";
   if (!walks.length) { box.innerHTML = '<p class="empty">まだ散歩の記録はありません。<br>散歩から帰ると、ここに道のりと写真、今日の気づきが残ります。</p>'; return; }
-  for (const w of walks) {
-    const ps = await photosOf(w.id);
+  for (const group of groupWalks(walks)) {
+    const w = group[0], ps = await photosOfGroup(group);
     const b = document.createElement("button");
     b.className = "walkitem";
     b.innerHTML = '<div class="thumb"></div><div><div class="t"></div><div class="m"></div></div>';
     if (ps[0]) b.querySelector(".thumb").style.backgroundImage = `url(${blobUrl(photoBlob(ps[0]))})`;
-    b.querySelector(".t").textContent = `${fmtDate(w.startedAt)}${w.stopName ? "・" + w.stopName : ""}`;
-    const done = (w.results || []).filter((r) => r.outcome === "done").length;
+    const who = group.length > 1 ? "・ふたりで" : w.fromCloud && window.Cloud && w.owner !== Cloud.myId() ? `・${Cloud.nameOf(w.owner)}の記録` : "";
+    b.querySelector(".t").textContent = `${fmtDate(w.startedAt)}${w.stopName ? "・" + w.stopName : ""}${who}`;
+    const done = group.reduce((n, x) => n + (x.results || []).filter((r) => r.outcome === "done").length, 0);
     b.querySelector(".m").textContent = `${fmtKm(w.distance)}km ・ ${w.minutes}分 ・ 気づき${done} ・ 写真${ps.length}枚${w.sim ? " ・ 試し" : ""}`;
     b.onclick = () => openDetail(w.id);
     box.appendChild(b);
@@ -1670,7 +1701,9 @@ async function openDetail(id) {
   releaseUrls();
   const w = await getWalk(id);
   if (!w) return showView("album");
-  const ps = await photosOf(id);
+  const group = groupWalks(await allWalks()).find((g) => g.some((x) => x.id === id)) || [w];
+  const ps = await photosOfGroup(group);
+  const label = (owner) => (group.length > 1 && window.Cloud ? Cloud.nameOf(owner) : "");
   $("#detailTitle").textContent = `${fmtDate(w.startedAt)}の散歩`;
   $("#detailMeta").textContent = `${fmtTime(w.startedAt)}〜${fmtTime(w.endedAt)} ・ ${fmtKm(w.distance)}km${w.stopName ? " ・ " + w.stopName + "に寄り道" : ""}${w.night ? " ・ 夜さんぽ" : ""}`;
   const fresh = (w.newBadges || []).map((bid) => BADGES.find((b) => b.id === bid)).filter(Boolean);
@@ -1701,16 +1734,18 @@ async function openDetail(id) {
     b.style.backgroundImage = `url(${blobUrl(photoBlob(p))})`;
     b.setAttribute("aria-label", p.mission || "写真");
     b.onclick = () => openViewer(p);
+    if (label(p.owner)) b.dataset.who = label(p.owner);
     grid.appendChild(b);
   });
 
-  const done = (w.results || []).filter((r) => r.outcome === "done");
+  // ふたりで歩いたときは、二人の気づきをまとめて、誰の気づきかを添える
+  const done = group.flatMap((x) => (x.results || []).filter((r) => r.outcome === "done").map((r) => ({ ...r, owner: x.owner })));
   $("#detailLog").hidden = !done.length;
   $("#logList").innerHTML = "";
   done.forEach((r) => {
     const li = document.createElement("li");
     li.innerHTML = '<span class="k"></span><span class="t"></span>';
-    li.querySelector(".k").textContent = r.kind === "talk" ? "話した" : "見つけた";
+    li.querySelector(".k").textContent = (label(r.owner) ? label(r.owner) + "・" : "") + (r.kind === "talk" ? "話した" : "見つけた");
     li.querySelector(".t").textContent = r.text;
     if (r.memo) { const mm = document.createElement("span"); mm.className = "memo"; mm.textContent = r.memo; li.appendChild(mm); }
     $("#logList").appendChild(li);
@@ -1913,6 +1948,7 @@ function init() {
   }
   store.del("active");
   if (!store.get("guideSeen", 0)) openGuide();
+  if (window.Cloud) Cloud.init();
   loadShared();
 }
 init();
