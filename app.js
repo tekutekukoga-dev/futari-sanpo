@@ -144,6 +144,8 @@ const plan = {
   stop: store.get("stop", "cafe"),
   interval: store.get("interval", 8),
   turnAlert: store.get("turnAlert", false),
+  theme: store.get("theme", "any"),
+  weather: null,
   candidates: [],
   chosen: null,
   seed: Math.floor(Math.random() * 1e9),
@@ -441,7 +443,34 @@ function showPoi(m, p) {
   const box = mkEl("poipop");
   box.append(mkEl("poiname", p.name), mkEl("poilabel", `${POI_GROUPS[p.group].label}・${p.label}`));
   if (p.wiki) { const a = document.createElement("a"); a.href = p.wiki; a.target = "_blank"; a.rel = "noopener"; a.textContent = "Wikipediaで読む"; box.append(a); }
-  new maplibregl.Popup({ offset: 16, closeButton: false, maxWidth: "240px" }).setLngLat(ll(p.pos)).setDOMContent(box).addTo(m);
+  const popup = new maplibregl.Popup({ offset: 16, closeButton: false, maxWidth: "240px" });
+  // ルートから少し離れた場所なら、そこを通るように道を引き直せる
+  const onPlan = m === planMap && plan.route, onWalk = m === walkMap && walk && !walk.resting;
+  if ((onPlan || onWalk) && routeDistance(onPlan ? plan.route : walk.route, p.pos) > 15) {
+    const b = document.createElement("button"); b.textContent = "ここに寄る";
+    b.onclick = () => { popup.remove(); onPlan ? addDetour(p) : reroute(p); };
+    box.append(b);
+  }
+  popup.setLngLat(ll(p.pos)).setDOMContent(box).addTo(m);
+}
+
+// ルート作成中に見どころを経由地に加える。いちばん遠回りが少ない位置に差し込む
+async function addDetour(poi) {
+  const r = plan.route, w = r.waypoints;
+  let at = 1, cost = Infinity;
+  for (let i = 1; i < w.length; i++) {
+    const c = dist(w[i - 1], poi.pos) + dist(poi.pos, w[i]) - dist(w[i - 1], w[i]);
+    if (c < cost) { cost = c; at = i; }
+  }
+  const pts = [...w.slice(0, at), poi.pos, ...w.slice(at)];
+  const stopIndex = r.stopIndex != null ? (r.stopIndex >= at ? r.stopIndex + 1 : r.stopIndex) : null;
+  try {
+    const nr = shapeRoute(await osrm(pts), pts, stopIndex);
+    nr.pois = r.pois; nr.detours = [...(r.detours || []), poi.name];
+    plan.route = nr;
+    showSummary(); await drawPlan(false);
+    toast(`「${poi.name}」に寄るルートにしました（${fmtDist(Math.max(0, nr.total - r.total))}増えます）`);
+  } catch (e) { toast(e.message, true); }
 }
 
 let planMap, planMarkers = [];
@@ -469,6 +498,20 @@ async function drawPlan(fit = true) {
     planMarkers.push(htmlMarker(planMap, plan.home, mkEl("pin", plan.route ? "スタート・ゴール" : "自宅"), { anchor: "bottom", offset: [0, -10] }));
   }
 }
+
+// ---------- 天気 ----------
+// Open-Meteo（無料・登録不要）でいまの天気を調べる
+const RAIN_CODES = [51, 53, 55, 56, 57, 61, 63, 65, 66, 67, 80, 81, 82, 95, 96, 99], SNOW_CODES = [71, 73, 75, 77, 85, 86];
+async function fetchWeather(home) {
+  try {
+    const d = await getJson(`https://api.open-meteo.com/v1/forecast?latitude=${home[0].toFixed(3)}&longitude=${home[1].toFixed(3)}&current=weather_code,temperature_2m`);
+    const code = d.current.weather_code, temp = Math.round(d.current.temperature_2m);
+    const kind = SNOW_CODES.includes(code) ? "snow" : RAIN_CODES.includes(code) ? "rain" : temp >= 30 ? "hot" : temp <= 5 ? "cold" : null;
+    const label = SNOW_CODES.includes(code) ? "雪" : RAIN_CODES.includes(code) ? "雨" : code <= 1 ? "晴れ" : code <= 3 ? "くもり" : code <= 48 ? "霧" : "くもり";
+    return { kind, label, temp };
+  } catch { return null; }
+}
+const themeKey = (seed) => (plan.theme === "any" ? Object.keys(THEMES)[Math.floor(rng(seed ^ 0x7e)() * Object.keys(THEMES).length)] : plan.theme === "none" ? null : plan.theme);
 
 // ---------- ルート作成 ----------
 function setHome(p) {
@@ -664,7 +707,20 @@ function showSummary() {
   $("#sumStop").textContent = plan.chosen && plan.stop !== "none" ? `途中で「${plan.chosen.name}」に寄ります` : "寄り道なしで、ぐるっと一周します";
   const { sunset } = sunTimes(new Date(), plan.home[0], plan.home[1]);
   const night = isNightWalk(Date.now(), r.total / WALK_SPEED / 60, plan.home);
-  $("#sumPois").textContent = "ルート沿いの見どころを探しています…";
+  $("#sumPois").textContent = r.pois ? (r.pois.length ? `ルート沿いに、ちょっと見たい場所が${r.pois.length}か所あります（地図の丸いマーク）` : "") : "ルート沿いの見どころを探しています…";
+  const tk = themeKey(plan.seed);
+  $("#sumTheme").textContent = tk ? `今日のテーマは「${THEMES[tk].label}」` : "";
+  $("#sumWeather").textContent = "";
+  fetchWeather(plan.home).then((w) => {
+    plan.weather = w;
+    if (!w) return;
+    const note = { rain: "。雨の日のお題も混ざります", snow: "。雪の日のお題も混ざります", hot: "。暑いので、日陰を選んで歩きましょう", cold: "。冷えるので、あたたかくして出かけましょう" }[w.kind] || "";
+    $("#sumWeather").textContent = `いまの天気は${w.label}・${w.temp}℃${note}`;
+  });
+  if (r.detours && r.detours.length) {
+    const names = `「${r.detours.join("」「")}」`;
+    $("#sumStop").textContent = plan.chosen && plan.stop !== "none" ? `途中で「${plan.chosen.name}」と${names}に寄ります` : `途中で${names}に寄ります`;
+  }
   $("#sumSun").textContent = night ? `日の入りは${fmtTime(sunset)}。いま出発すると、夜向けのお題も混ざります` : `日の入りは${fmtTime(sunset)}`;
   $("#routeSummary").hidden = false;
 }
@@ -700,7 +756,9 @@ async function onMake() {
 // ---------- 共有 ----------
 function shareLink() {
   const payload = {
-    h: plan.home.map((v) => +v.toFixed(5)), m: plan.minutes, i: plan.interval, s: plan.seed, st: plan.stop,
+    h: plan.home.map((v) => +v.toFixed(5)), m: plan.minutes, i: plan.interval, s: plan.seed, st: plan.stop, th: plan.theme,
+    w: plan.route && plan.route.detours ? plan.route.waypoints.map((q) => q.map((v) => +v.toFixed(5))) : undefined,
+    si: plan.route && plan.route.detours ? plan.route.stopIndex : undefined, dt: plan.route && plan.route.detours,
     c: plan.chosen && plan.stop !== "none" ? { n: plan.chosen.name, p: plan.chosen.pos.map((v) => +v.toFixed(5)), id: plan.chosen.id, t: plan.chosen.type } : null,
   };
   // #以降はサーバーに送られないので、自宅の位置がホスティング先に残らない
@@ -719,13 +777,18 @@ async function loadShared() {
   if (!m) return false;
   try {
     const p = JSON.parse(decodeURIComponent(m[1]));
-    Object.assign(plan, { home: p.h, minutes: p.m, interval: p.i, seed: p.s, stop: p.st, shared: true });
+    Object.assign(plan, { home: p.h, minutes: p.m, interval: p.i, seed: p.s, stop: p.st, theme: p.th || "any", shared: true });
     plan.chosen = p.c ? { id: p.c.id, name: p.c.n, pos: p.c.p, type: p.c.t || p.st, d: dist(p.h, p.c.p) } : null;
     plan.candidates = plan.chosen ? [plan.chosen] : [];
     $("#sharedBanner").hidden = false;
     $("#planForm").hidden = true; $("#btnMake").hidden = true;
     planMap.jumpTo({ center: ll(plan.home), zoom: 15 });
-    await buildRoute();
+    if (p.w) {
+      // 寄り道を足したルートは、経由地をそのまま使って同じ道にする
+      plan.route = shapeRoute(await osrm(p.w), p.w, p.si ?? null);
+      plan.route.detours = p.dt || [];
+      showSummary(); await drawPlan(); loadPois(plan.route);
+    } else await buildRoute();
     return true;
   } catch { return false; }
 }
@@ -733,13 +796,23 @@ async function loadShared() {
 // ---------- お題の予定 ----------
 // お題は「歩いた距離」で届く。同じseedなら二人のスマホで同じ場所・同じお題になる
 const fits = (night) => (m) => !m.when || m.when === (night ? "night" : "day");
-function missionPlan(seed, total, interval, stopAlong, night) {
+function missionPlan(seed, total, interval, stopAlong, night, theme, weather) {
   const r = rng(seed ^ 0x5a5a);
-  const look = shuffle(MISSIONS.look.filter(fits(night)), r).map((m) => ({ kind: "look", ...m }));
+  let look = shuffle(MISSIONS.look.filter(fits(night)), r).map((m) => ({ kind: "look", ...m }));
+  // テーマがある日は、テーマに合うお題を3回に2回の割合で出す
+  if (theme && THEMES[theme]) {
+    const extra = (THEMES[theme].extra || []).filter(fits(night)).map((m) => ({ kind: "look", ...m }));
+    const on = shuffle([...extra, ...look.filter((m) => THEMES[theme].test.test(m.text))], r), off = look.filter((m) => !THEMES[theme].test.test(m.text));
+    if (on.length >= 4) { look = []; while (on.length || off.length) { if (on.length) look.push(on.shift()); if (on.length) look.push(on.shift()); if (off.length) look.push(off.shift()); } }
+  }
   const talk = shuffle(MISSIONS.talk, r).map((m) => ({ kind: "talk", ...m }));
   // 季節のお題は、最初のほうに混ぜる
+  // （テーマがある日は、テーマのお題を先に出してから）
   MISSIONS.season[seasonKey(new Date().getMonth() + 1)].filter(fits(night))
-    .forEach((m) => look.splice(1 + Math.floor(r() * 3), 0, { kind: "look", ...m }));
+    .forEach((m) => look.splice((theme ? 5 : 1) + Math.floor(r() * 3), 0, { kind: "look", ...m }));
+  // 天気のお題は、はじめのほうに混ぜる
+  if (weather && weather.kind) shuffle(MISSIONS.weather[weather.kind].filter(fits(night)), r).slice(0, 3)
+    .forEach((m, i) => look.splice(i * 2, 0, { kind: "look", ...m }));
   // 観察を多めに：観察・観察・会話のタネ の繰り返し
   const order = ["look", "look", "talk"];
   const used = { look: 0, talk: 0 };
@@ -861,11 +934,13 @@ function startWalk(sim) {
     stopName: plan.chosen && plan.stop !== "none" ? plan.chosen.name : null,
     stopMission: plan.chosen && plan.stop !== "none" ? STOP_TYPES[plan.chosen.type || plan.stop].mission : null,
     progress: 0, track: [plan.home], pos: plan.home, lastFixAt: Date.now(),
-    events: missionPlan(plan.seed, route.total, plan.interval, route.stopAlong, night), eventIdx: 0,
+    events: missionPlan(plan.seed, route.total, plan.interval, route.stopAlong, night, themeKey(plan.seed), plan.weather), eventIdx: 0,
+    theme: themeKey(plan.seed), weather: plan.weather,
     turnAlert: plan.turnAlert, alerted: [], noticed: [],
     inbox: [], results: [], photos: 0,
     stopArrived: false, resting: false, restMs: 0, restStart: 0, off: 0, simAlong: 0, done: false,
   };
+  if (walk.theme) walk.inbox.push({ kind: "theme", id: "theme", text: `今日のテーマは「${THEMES[walk.theme].label}」。${THEMES[walk.theme].desc}`, arrivedAt: Date.now() });
   buzz(100);
   resumeWalkSession();
 }
@@ -875,6 +950,8 @@ function resumeWalkSession() {
   showView("walk");
   $("#simBadge").hidden = !walk.sim;
   $("#nightBadge").hidden = !walk.night;
+  $("#themeBadge").hidden = !walk.theme;
+  if (walk.theme) $("#themeBadge").textContent = THEMES[walk.theme].label;
   $("#btnHeading").textContent = heading.mode === "north" ? "N" : "↑";
   if (!walkMap) {
     walkMap = makeMap($("#walkMap"), { dragPan: false, zoom: 17, center: ll(walk.pos) });
@@ -1047,12 +1124,24 @@ function renderCard() {
   $("#missionMore").textContent = walk.inbox.length > 1 ? `ほかに${walk.inbox.length - 1}つ届いています` : "";
   $("#btnShoot").hidden = !k.shoot;
   $("#btnDone").textContent = k.done;
+  $("#btnNext").hidden = m.kind === "theme";
+  $("#memoBox").hidden = true; $("#missionActions").hidden = false;
   updateWalkUI();
 }
-function resolve(outcome) {
+// 「見つけた」「話した」を押したら、一言メモ欄を開く
+function askMemo() {
+  const m = walk.inbox[0];
+  if (!m) return;
+  if (m.kind === "theme") return resolve("done");
+  $("#missionActions").hidden = true; $("#memoBox").hidden = false;
+  $("#memoInput").value = "";
+  $("#memoInput").placeholder = m.kind === "talk" ? "どんな話になった？（なくてもOK）" : "何を見つけた？（なくてもOK）。キーボードのマイクで声でも入力できます";
+}
+function resolve(outcome, memo) {
   const m = walk.inbox.shift();
   if (!m) return;
-  walk.results.push({ id: m.id, kind: m.kind, cat: m.cat || null, text: m.text, outcome });
+  if (m.kind === "theme") { renderCard(); saveActive(); return; }
+  walk.results.push({ id: m.id, kind: m.kind, cat: m.cat || null, text: m.text, outcome, memo: memo || null });
   if (outcome === "done") toast(m.kind === "talk" ? "いい時間でしたね" : "ナイス観察！");
   renderCard(); saveActive();
 }
@@ -1078,13 +1167,15 @@ function updateWalkUI() {
   $("#idleText").textContent = ev ? `次のお題は ${fmtDist(ev.at - prog)} 先で届きます` : "今日のお題はここまで。家までの道を楽しんで";
 }
 
-async function reroute() {
+// 道を外れたときや、散歩中に見どころへ寄るときに、いまいる場所から引き直す
+async function reroute(via) {
   const r = walk.route;
   const legIdx = r.legEnds.findIndex((e) => e > walk.progress);
   const rest = r.waypoints.slice(legIdx + 1);
-  const pts = [walk.pos, ...rest];
+  const viaPts = via && via.pos ? [via.pos] : [];
+  const pts = [walk.pos, ...viaPts, ...rest];
   let stopIndex = null;
-  if (r.stopIndex != null && !walk.stopArrived && r.stopIndex >= legIdx + 1) stopIndex = r.stopIndex - legIdx;
+  if (r.stopIndex != null && !walk.stopArrived && r.stopIndex >= legIdx + 1) stopIndex = r.stopIndex - legIdx + viaPts.length;
   $("#btnReroute").disabled = true;
   try {
     const nr = shapeRoute(await osrm(pts), pts, stopIndex);
@@ -1094,10 +1185,11 @@ async function reroute() {
     const step = remaining.length > 1 ? remaining[1].at - remaining[0].at : 0;
     remaining.forEach((e, i) => (e.at = Math.min(nr.total * 0.9, Math.max(50, shift) + step * i)));
     walk.events = remaining; walk.eventIdx = 0;
+    nr.pois = r.pois;
     walk.route = nr; walk.progress = 0; walk.simAlong = 0; walk.off = 0; walk.alerted = [];
     drawWalkRoute();
     $("#offRoute").hidden = true;
-    toast("ここからの道を引き直しました");
+    toast(viaPts.length ? `「${via.name}」に寄ってから、もとの道に戻ります` : "ここからの道を引き直しました");
     saveActive(); updateWalkUI();
   } catch (e) { toast(e.message, true); }
   finally { $("#btnReroute").disabled = false; }
@@ -1112,12 +1204,12 @@ async function finishWalk(early) {
   const w = walk;
   const elapsed = (Date.now() - w.startedAt - w.restMs) * (w.sim ? SIM_SPEED : 1);
   // 届いたまま手をつけなかったお題も「飛ばした」として残す
-  w.inbox.forEach((m) => w.results.push({ id: m.id, kind: m.kind, cat: m.cat || null, text: m.text, outcome: "skip" }));
+  w.inbox.filter((m) => m.kind !== "theme").forEach((m) => w.results.push({ id: m.id, kind: m.kind, cat: m.cat || null, text: m.text, outcome: "skip" }));
   const record = {
     id: w.id, startedAt: w.startedAt, endedAt: Date.now(), minutes: Math.round(elapsed / 60000),
     distance: Math.round(early ? w.progress : w.route.total), stopName: w.stopName,
     route: w.route.coords.filter((_, i) => i % 3 === 0), track: w.track, photos: w.photos,
-    results: w.results, sim: w.sim, night: !!w.night,
+    results: w.results, sim: w.sim, night: !!w.night, theme: w.theme || null, weather: w.weather || null,
   };
   // この散歩で新しく取ったバッジと、上がった称号を記録しておく
   try {
@@ -1252,6 +1344,10 @@ async function renderAlbum() {
   const box = $("#albumList");
   const walks = (await allWalks()).sort((a, b) => b.startedAt - a.startedAt);
   renderBadges(walks);
+  // ホーム画面に追加していないSafariでは、しばらく使わないと保存したデータが消されることがある
+  const standalone = navigator.standalone || matchMedia("(display-mode: standalone)").matches;
+  $("#backupHint").textContent = "写真と記録はこのスマホの中だけに保存されています。ときどき書き出しておくと安心です。" +
+    (standalone ? "" : "Safariのままだと、しばらく使わないと消えることがあります。共有ボタンの「ホーム画面に追加」から使うのがおすすめです。");
   box.innerHTML = "";
   if (!walks.length) { box.innerHTML = '<p class="empty">まだ散歩の記録はありません。<br>散歩から帰ると、ここに道のりと写真、今日の気づきが残ります。</p>'; return; }
   for (const w of walks) {
@@ -1313,11 +1409,68 @@ async function openDetail(id) {
   $("#logList").innerHTML = "";
   done.forEach((r) => {
     const li = document.createElement("li");
-    li.innerHTML = '<span class="k"></span><span></span>';
-    li.firstChild.textContent = r.kind === "talk" ? "話した" : "見つけた";
-    li.lastChild.textContent = r.text;
+    li.innerHTML = '<span class="k"></span><span class="t"></span>';
+    li.querySelector(".k").textContent = r.kind === "talk" ? "話した" : "見つけた";
+    li.querySelector(".t").textContent = r.text;
+    if (r.memo) { const mm = document.createElement("span"); mm.className = "memo"; mm.textContent = r.memo; li.appendChild(mm); }
     $("#logList").appendChild(li);
   });
+}
+
+// ---------- バックアップ ----------
+// 写真と記録を1つのファイル（JSON）にまとめて書き出す。iPhoneでは共有メニューから「ファイル」に保存できる
+function bufToBase64(buf) {
+  const bytes = new Uint8Array(buf); let bin = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+  return btoa(bin);
+}
+function base64ToBuf(b64) {
+  const bin = atob(b64), bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes.buffer;
+}
+async function exportAll() {
+  $("#btnExport").disabled = true;
+  try {
+    const walks = await allWalks();
+    const photos = await idb("photos", "readonly", (st) => st.getAll());
+    const out = [];
+    for (const p of photos) out.push({ walkId: p.walkId, type: p.type || "image/jpeg", mission: p.mission, pos: p.pos, at: p.at, data: bufToBase64(await toBuffer(photoBlob(p))) });
+    const json = JSON.stringify({ app: "futari-sanpo", version: 1, exportedAt: Date.now(), walks, photos: out });
+    const d = new Date(), name = `futari-sanpo-${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}${String(d.getDate()).padStart(2, "0")}.json`;
+    const file = new File([json], name, { type: "application/json" });
+    try {
+      if (navigator.canShare && navigator.canShare({ files: [file] })) { await navigator.share({ files: [file], title: "ふたり散歩のバックアップ" }); return toast("書き出しました"); }
+    } catch (e) { if (e.name === "AbortError") return; }
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(file); a.download = name; document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+    toast(`「${name}」を書き出しました`);
+  } catch (e) {
+    toast("書き出せませんでした：" + (e && e.message), true);
+  } finally { $("#btnExport").disabled = false; }
+}
+async function importAll(e) {
+  const file = e.target.files && e.target.files[0];
+  e.target.value = "";
+  if (!file) return;
+  try {
+    const data = JSON.parse(await file.text());
+    if (data.app !== "futari-sanpo") throw new Error("ふたり散歩のバックアップファイルではありません");
+    const haveWalks = new Set((await allWalks()).map((w) => w.id));
+    const havePhotos = new Set((await idb("photos", "readonly", (st) => st.getAll())).map((p) => p.walkId + ":" + p.at));
+    let nw = 0, np = 0;
+    for (const w of data.walks || []) if (!haveWalks.has(w.id)) { await putWalk(w); nw++; }
+    for (const p of data.photos || []) {
+      if (havePhotos.has(p.walkId + ":" + p.at)) continue;
+      await addPhoto({ walkId: p.walkId, type: p.type, mission: p.mission, pos: p.pos, at: p.at, data: base64ToBuf(p.data) });
+      np++;
+    }
+    toast(nw || np ? `散歩${nw}回分と写真${np}枚を読み込みました` : "新しく読み込む記録はありませんでした");
+    renderAlbum();
+  } catch (err) {
+    toast("読み込めませんでした：" + (err && err.message), true);
+  }
 }
 
 // ---------- 使い方 ----------
@@ -1341,12 +1494,14 @@ const GUIDE = [
   { step: "4 / 5", title: "お題は2種類", pic: "観察 ＋ 会話のタネ", items: [
     "「観察」は、ふだん見過ごしている細かいところに目を向けるお題です",
     "「会話のタネ」は、歩きながらゆっくり話したい質問です",
-    "できたら「見つけた」「話した」。気分じゃなければ「次へ」で飛ばせます",
+    "できたら「見つけた」「話した」。一言メモも残せます。気分じゃなければ「次へ」で飛ばせます",
+    "その日のテーマを選ぶと、テーマに合うお題が多めに出ます。雨の日は雨のお題も混ざります",
   ] },
   { step: "5 / 5", title: "写真とアルバム", pic: "撮る → アルバム", items: [
     "右下のカメラボタンか、お題の「撮る」で撮影します",
     "写真はこのアプリの中に保存されます。カメラロールに残したい写真は、アルバムで写真を開いて保存してください",
     "帰ると、道のり・写真・今日の気づき・バッジがアルバムに残ります",
+    "アルバムの「ファイルに書き出す」で、ときどきバックアップしておくと安心です",
   ] },
 ];
 let guidePage = 0;
@@ -1400,6 +1555,7 @@ function init() {
   $("#chkTurn").onchange = (e) => { plan.turnAlert = e.target.checked; store.set("turnAlert", plan.turnAlert); if (plan.turnAlert) unlockAudio(); };
   bindSeg("segStop", "stop", resetRoute);
   bindSeg("segInterval", "interval");
+  bindSeg("segTheme", "theme", () => plan.route && showSummary());
 
   $("#btnHere").onclick = async () => {
     $("#btnHere").disabled = true;
@@ -1416,10 +1572,12 @@ function init() {
   $("#btnShoot").addEventListener("click", () => { photoFor = walk && walk.inbox[0] ? walk.inbox[0].text : null; });
   $("#btnFree").addEventListener("click", () => { photoFor = null; });
   $("#photoInput").addEventListener("change", onPhoto);
-  $("#btnDone").onclick = () => resolve("done");
+  $("#btnDone").onclick = askMemo;
+  $("#btnMemoSave").onclick = () => resolve("done", $("#memoInput").value.trim());
+  $("#btnMemoSkip").onclick = () => resolve("done");
   $("#btnNext").onclick = () => resolve("skip");
   $("#btnResume").onclick = resumeFromRest;
-  $("#btnReroute").onclick = reroute;
+  $("#btnReroute").onclick = () => reroute();
   $("#btnHeading").onclick = cycleHeading;
   let endArmed = 0;
   $("#btnEnd").onclick = () => {
@@ -1431,6 +1589,8 @@ function init() {
   $("#btnBack").onclick = () => showView("album");
   $$("#tabs button").forEach((b) => b.onclick = () => showView(b.dataset.tab));
   $("#btnSavePhoto").onclick = savePhoto;
+  $("#btnExport").onclick = exportAll;
+  $("#importInput").addEventListener("change", importAll);
   $("#btnCloseViewer").onclick = () => ($("#viewer").hidden = true);
   $("#viewer").onclick = (e) => { if (e.target.id === "viewer") $("#viewer").hidden = true; };
   $("#btnHelp1").onclick = openGuide;

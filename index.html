@@ -10,7 +10,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Zen+Maru+Gothic:wght@700&display=swap">
 <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
-<link rel="stylesheet" href="style.css?v=11">
+<link rel="stylesheet" href="style.css?v=12">
 </head>
 <body>
 
@@ -53,6 +53,12 @@
       <input type="checkbox" id="chkTurn" class="toggle" switch>
     </div>
     <div class="item col">
+      <span class="itemlabel">今日のテーマ</span>
+      <div class="seg wrap" id="segTheme">
+        <button data-v="any">おまかせ</button><button data-v="color">色の日</button><button data-v="sound">音の日</button><button data-v="retro">昭和さがし</button><button data-v="small">小さいもの</button><button data-v="shape">形の日</button><button data-v="life">生きもの</button><button data-v="none">なし</button>
+      </div>
+    </div>
+    <div class="item col">
       <span class="itemlabel">お題の数</span>
       <div class="seg" id="segInterval">
         <button data-v="5">多め</button><button data-v="8">ふつう</button><button data-v="12">少なめ</button>
@@ -71,6 +77,8 @@
       <li id="sumLoop"></li>
       <li id="sumStop"></li>
       <li id="sumPois"></li>
+      <li id="sumTheme"></li>
+      <li id="sumWeather"></li>
       <li id="sumSun"></li>
     </ul>
     <button id="btnStart" class="primary">出発する</button>
@@ -97,6 +105,7 @@
   <div id="badgesRow" class="chips">
     <span id="simBadge" class="chip warn" hidden>試しモード（8倍速）</span>
     <span id="nightBadge" class="chip night" hidden>夜さんぽ</span>
+    <span id="themeBadge" class="chip" hidden></span>
     <span id="offRoute" class="chip warn" hidden>ルートから外れています <button id="btnReroute" class="link">引き直す</button></span>
   </div>
 
@@ -121,7 +130,14 @@
       <div class="cardhead"><span class="kind" id="missionKind"></span><span class="muted small" id="missionMore"></span></div>
       <p id="missionText"></p>
       <p id="missionTip" class="tip" hidden></p>
-      <div class="actions">
+      <div id="memoBox" class="memobox" hidden>
+        <textarea id="memoInput" rows="2" placeholder="一言メモ（なくてもOK）。キーボードのマイクで声でも入力できます"></textarea>
+        <div class="actions">
+          <button class="primary" id="btnMemoSave">残す</button>
+          <button class="secondary" id="btnMemoSkip">メモなしで次へ</button>
+        </div>
+      </div>
+      <div class="actions" id="missionActions">
         <label class="secondary" for="photoInput" id="btnShoot">撮る</label>
         <button class="primary" id="btnDone">見つけた</button>
         <button class="secondary" id="btnNext">次へ</button>
@@ -151,6 +167,15 @@
     <summary>バッジ <span id="badgeCount" class="muted"></span></summary>
     <div id="badgeGrid" class="badgegrid"></div>
   </details>
+  <div class="group backup">
+    <span class="itemlabel">アルバムのバックアップ</span>
+    <p class="small muted" id="backupHint">写真と記録はこのiPhoneの中だけに保存されています。ときどき書き出しておくと安心です。</p>
+    <div class="actions">
+      <button id="btnExport" class="secondary">ファイルに書き出す</button>
+      <label for="importInput" class="secondary">ファイルから読み込む</label>
+    </div>
+    <input type="file" id="importInput" accept=".json,application/json" class="visually-hidden">
+  </div>
   <h2>散歩の記録</h2>
   <div id="albumList" class="albumlist"></div>
 </section>
@@ -206,8 +231,8 @@
 <div id="toast" class="toast" hidden></div>
 
 <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
-<script src="missions.js?v=11"></script>
-<script src="badges.js?v=11"></script>
-<script src="app.js?v=11"></script>
+<script src="missions.js?v=12"></script>
+<script src="badges.js?v=12"></script>
+<script src="app.js?v=12"></script>
 </body>
 </html>
