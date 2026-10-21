@@ -14,7 +14,7 @@ const STOP_TYPES = {
   cafe: { label: "カフェ", tag: "amenity:cafe", q: '["amenity"="cafe"]', phrase: "cafe", mission: "stop" },
   bakery: { label: "パン屋", tag: "shop:bakery", q: '["shop"="bakery"]', phrase: "bakery", mission: "stop" },
   park: { label: "公園", tag: "leisure:park", q: '["leisure"="park"]', phrase: "park", mission: "park" },
-  shrine: { label: "神社・お寺", tag: "amenity:place_of_worship", q: '["amenity"="place_of_worship"]', phrase: "place of worship", mission: "park", name: /神社|寺|宮|稲荷|八幡|天神|観音|不動|地蔵|権現|社$/ },
+  shrine: { label: "神社・お寺", tag: "amenity:place_of_worship", q: '["amenity"="place_of_worship"]', phrase: "place of worship", mission: "shrine", name: /神社|寺|宮|稲荷|八幡|天神|観音|不動|地蔵|権現|社$/ },
   none: { label: "寄り道なし" },
 };
 
@@ -136,6 +136,7 @@ const plan = {
   seed: Math.floor(Math.random() * 1e9),
   route: null,
   shared: false,
+  role: "A",
 };
 let walk = null;
 
@@ -407,7 +408,7 @@ async function loadShared() {
   if (!m) return false;
   try {
     const p = JSON.parse(decodeURIComponent(m[1]));
-    Object.assign(plan, { home: p.h, minutes: p.m, interval: p.i, seed: p.s, stop: p.st, shared: true });
+    Object.assign(plan, { home: p.h, minutes: p.m, interval: p.i, seed: p.s, stop: p.st, shared: true, role: "B" });
     plan.chosen = p.c ? { id: p.c.id, name: p.c.n, pos: p.c.p, d: dist(p.h, p.c.p) } : null;
     plan.candidates = plan.chosen ? [plan.chosen] : [];
     $("#sharedBanner").hidden = false;
@@ -420,14 +421,16 @@ async function loadShared() {
 
 // ---------- お題の予定 ----------
 // お題は「歩いた距離」で届く。同じseedなら二人のスマホで同じ場所・同じお題になる
+const fits = (night) => (m) => !m.when || m.when === (night ? "night" : "day");
 function missionPlan(seed, total, interval, stopAlong, night) {
   const r = rng(seed ^ 0x5a5a);
   const pools = {};
-  // 夜は、見つけるもの・撮るものが変わる種類だけ夜用に入れ替える
-  ["race", "photo", "guess", "quiz", "game", "coop"].forEach((k) => (pools[k] = shuffle(night && MISSIONS.night[k] ? MISSIONS.night[k] : MISSIONS[k], r)));
-  if (!night) pools.photo = shuffle([...pools.photo, ...MISSIONS[seasonKey(new Date().getMonth() + 1)]], r);
-  const rare = shuffle(night ? MISSIONS.night.rare : MISSIONS.rare, r);
-  const order = ["race", "photo", "quiz", "coop", "game", "guess", "photo", "race", "coop", "quiz", "game", "photo"];
+  Object.keys(MODES).forEach((k) => (pools[k] = shuffle(MISSIONS[k].filter(fits(night)).map((m) => ({ mode: k, ...m })), r)));
+  // 季節のお題を、同じ種類の山に混ぜる
+  MISSIONS.season[seasonKey(new Date().getMonth() + 1)].filter(fits(night)).forEach((m) => pools[m.mode].splice(Math.floor(r() * 3), 0, m));
+  const rare = shuffle(MISSIONS.rare.filter(fits(night)), r);
+  // 秘密指令は「相手の様子をうかがう」時間が要るので、続けて出さない
+  const order = ["secret", "photo", "talk", "hunt", "coop", "quiz", "secret", "game", "photo", "guess", "talk", "coop"];
   const used = {};
   const step = interval * 60 * WALK_SPEED;
   const events = [];
@@ -436,17 +439,19 @@ function missionPlan(seed, total, interval, stopAlong, night) {
     if (stopAlong != null && Math.abs(at - stopAlong) < 150) continue;
     let m;
     if (n > 0 && r() < 0.12 && rare.length) {
-      const x = rare.pop(); m = { mode: x.mode, text: x.text, pts: 3, rare: true };
+      m = { ...rare.pop(), pts: 3, rare: true };
     } else {
       const mode = order[n % order.length];
       used[mode] = (used[mode] || 0) + 1;
-      m = { mode, text: pools[mode][(used[mode] - 1) % pools[mode].length], pts: 1 };
+      m = { ...pools[mode][(used[mode] - 1) % pools[mode].length], pts: 1 };
     }
     events.push({ at, ...m, id: "m" + n });
   }
-  events.push({ at: total * 0.88, ...(night ? MISSIONS.night.final : MISSIONS.final), id: "final" });
+  events.push({ at: total * 0.88, ...MISSIONS.final, id: "final" });
   return events;
 }
+// 秘密指令は、ルートを作った人(A)と共有リンクを開いた人(B)で中身が変わる
+const missionText = (m) => (m.mode === "secret" ? (walk && walk.role === "B" ? m.b : m.a) : m.text);
 
 // ---------- 散歩中 ----------
 let walkMap, walkRouteLine, walkTrackLine, walkMe;
@@ -455,7 +460,7 @@ function startWalk(sim) {
   const route = plan.route;
   const night = isNightWalk(Date.now(), route.total / WALK_SPEED / 60, plan.home);
   walk = {
-    id: "w" + Date.now(), startedAt: Date.now(), sim, route, seed: plan.seed, night,
+    id: "w" + Date.now(), startedAt: Date.now(), sim, route, seed: plan.seed, night, role: plan.role,
     stopName: plan.chosen && plan.stop !== "none" ? plan.chosen.name : null,
     stopMission: STOP_TYPES[plan.stop].mission || null,
     progress: 0, track: [plan.home], pos: plan.home, lastFixAt: Date.now(),
@@ -613,8 +618,9 @@ function renderInbox() {
     c.innerHTML = `<div class="head"><span class="tag"></span><span class="ptsbadge"></span></div><p></p><div class="arrived"></div><div class="judge"></div>`;
     c.querySelector(".tag").textContent = (m.rare ? "★ " : "") + mode.label;
     c.querySelector(".ptsbadge").textContent = mode.battle ? `勝つと${m.pts}ポイント` : "勝ち負けなし";
-    c.querySelector("p").textContent = m.text;
-    c.querySelector(".arrived").textContent = `${fmtTime(m.arrivedAt)}に届きました`;
+    c.querySelector("p").textContent = missionText(m);
+    c.querySelector(".arrived").textContent = `${fmtTime(m.arrivedAt)}に届きました${mode.note ? "・" + mode.note : ""}`;
+    if (m.mode === "secret") c.classList.add("secret");
     const j = c.querySelector(".judge");
     const btn = (label, cls, fn) => { const b = document.createElement("button"); b.textContent = label; b.className = cls; b.onclick = fn; j.appendChild(b); };
     if (mode.shoot) btn("撮る", "ghost", () => shoot(m));
@@ -634,7 +640,7 @@ function renderInbox() {
 
 function resolve(m, outcome) {
   walk.inbox = walk.inbox.filter((x) => x.id !== m.id);
-  walk.results.push({ id: m.id, mode: m.mode, text: m.text, pts: m.pts, outcome });
+  walk.results.push({ id: m.id, mode: m.mode, text: missionText(m), pts: m.pts, outcome });
   if (outcome === "me") walk.me += m.pts;
   if (outcome === "you") walk.you += m.pts;
   if (outcome === "me" || outcome === "you") bump(outcome);
@@ -740,7 +746,7 @@ async function onPhoto(e) {
   const file = e.target.files && e.target.files[0];
   if (!file || !walk) return;
   const blob = await resize(file);
-  await addPhoto({ walkId: walk.id, blob, mission: photoFor ? photoFor.text : null, pos: walk.pos, at: Date.now() });
+  await addPhoto({ walkId: walk.id, blob, mission: photoFor ? missionText(photoFor) : null, pos: walk.pos, at: Date.now() });
   walk.photos++;
   toast(photoFor && MODES[photoFor.mode].battle ? "保存しました。見せ合って勝敗を決めよう" : "写真を保存しました");
   saveActive(); updateWalkUI();

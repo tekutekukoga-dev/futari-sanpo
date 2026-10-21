@@ -26,7 +26,8 @@ const BADGES = [
   { id: "draw", mark: "和", name: "仲良し引き分け", desc: "同点で散歩を終える", need: 1, get: (s) => s.draws },
   { id: "rare1", mark: "稀", name: "レアハンター", desc: "レアお題で勝つ", need: 1, get: (s) => s.rareWins },
   { id: "rare3", mark: "宝", name: "幸運の持ち主", desc: "レアお題で3回勝つ", need: 3, get: (s) => s.rareWins },
-  { id: "allmode", mark: "全", name: "オールラウンダー", desc: "早い者勝ち・撮影・予想・相手当て・ミニゲームで1回ずつ勝つ", need: 5, get: (s) => s.modesWon },
+  { id: "allmode", mark: "全", name: "オールラウンダー", desc: "5種類以上の勝負で、それぞれ1回は勝つ", need: 5, get: (s) => s.modesWon },
+  { id: "secret3", mark: "密", name: "名スパイ", desc: "秘密指令で3回勝つ", need: 3, get: (s) => s.secretWins },
   { id: "coop5", mark: "仲", name: "息ぴったり", desc: "「ふたりで」のお題を5回クリア", need: 5, get: (s) => s.coops },
   { id: "photo10", mark: "写", name: "撮影係", desc: "写真を合計10枚撮る", need: 10, get: (s) => s.photos },
   { id: "photo50", mark: "匠", name: "散歩カメラマン", desc: "写真を合計50枚撮る", need: 50, get: (s) => s.photos },
@@ -36,11 +37,11 @@ const BADGES = [
   { id: "night", mark: "夜", name: "夜さんぽ", desc: "日が暮れてから散歩する", need: 1, get: (s) => s.nights },
 ];
 
-const BATTLE_MODES = ["race", "photo", "guess", "quiz", "game"];
+const BATTLE_MODES = ["secret", "photo", "talk", "hunt", "game", "quiz", "guess", "race"];
 
 function badgeStats(walks) {
   const list = walks.filter((w) => !w.sim && w.me != null).sort((a, b) => a.startedAt - b.startedAt);
-  const s = { walks: list.length, km: 0, pts: 0, wins: 0, draws: 0, streak: 0, bestStreak: 0, perfects: 0, comebacks: 0, rareWins: 0, coops: 0, photos: 0, mornings: 0, nights: 0 };
+  const s = { walks: list.length, km: 0, pts: 0, wins: 0, draws: 0, streak: 0, bestStreak: 0, perfects: 0, comebacks: 0, rareWins: 0, secretWins: 0, coops: 0, photos: 0, mornings: 0, nights: 0 };
   const modes = new Set(), stops = new Set();
   for (const w of list) {
     s.km += w.distance / 1000;
@@ -56,7 +57,7 @@ function badgeStats(walks) {
     // 途中で負けていて、最後に勝ち越したら逆転
     let me = 0, you = 0, behind = false;
     for (const r of w.results || []) {
-      if (r.outcome === "me") { me += r.pts; if (r.pts === 3) s.rareWins++; if (BATTLE_MODES.includes(r.mode)) modes.add(r.mode); }
+      if (r.outcome === "me") { me += r.pts; if (r.mode === "secret") s.secretWins++; if (r.pts === 3) s.rareWins++; if (BATTLE_MODES.includes(r.mode)) modes.add(r.mode); }
       if (r.outcome === "you") you += r.pts;
       if (r.outcome === "done") s.coops++;
       if (you > me) behind = true;

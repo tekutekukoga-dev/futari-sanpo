@@ -191,3 +191,6 @@ button:disabled { opacity: .5; cursor: default; }
 .newbadges .badge .seal { animation: stampin .6s ease both; }
 @keyframes stampin { from { transform: scale(1.8) rotate(-20deg); opacity: 0; } to { transform: scale(1) rotate(-8deg); opacity: 1; } }
 .simbadge.night { background: #1d2a44; color: #f3e6a6; }
+.card.mission.secret { background: #1d2a44; border-color: #6f86c6; color: #eef1fb; }
+.card.mission.secret .tag { color: #f3e6a6; }
+.card.mission.secret .arrived, .card.mission.secret .ptsbadge { color: #b8c3e3; }
