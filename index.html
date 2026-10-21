@@ -3,179 +3,206 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="theme-color" content="#2f5d4a">
+<meta name="theme-color" content="#f5f6f4">
 <meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="ふたり散歩">
 <title>ふたり散歩</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Zen+Maru+Gothic:wght@500;700&family=Noto+Sans+JP:wght@400;600&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Zen+Maru+Gothic:wght@700&display=swap">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
-<link rel="stylesheet" href="style.css?v=5">
+<link rel="stylesheet" href="style.css?v=7">
 </head>
 <body>
-<header class="topbar">
-  <h1>ふたり散歩</h1>
-  <span id="todayLabel" class="today"></span>
-</header>
 
-<main>
-  <!-- ルートを決める -->
-  <section id="view-plan" class="view">
+<!-- ルートを決める -->
+<section id="view-plan" class="page">
+  <header class="pagehead">
+    <h1 class="logo">ふたり散歩</h1>
+    <button class="iconbtn" id="btnHelp1" aria-label="使い方">？</button>
+  </header>
+
+  <div class="mapcard">
     <div id="planMap" class="map"></div>
-    <p class="hint" id="mapHint">地図をタップすると、その場所を自宅に設定できます</p>
+    <p class="maphint" id="mapHint">地図をタップすると、そこを自宅に設定できます</p>
+  </div>
 
-    <div id="sharedBanner" class="banner" hidden>パートナーから共有されたルートです。このまま「出発する」を押してください。</div>
+  <div id="sharedBanner" class="note" hidden>パートナーから届いたルートです。下の「出発する」を押してください。</div>
 
-    <div class="panel" id="planForm">
-      <div class="field">
-        <span class="label">自宅</span>
-        <div class="row">
-          <span id="homeLabel" class="value muted">未設定</span>
-          <button id="btnHere" class="ghost">現在地を自宅にする</button>
-        </div>
+  <div id="planForm" class="group">
+    <div class="item">
+      <span class="itemlabel">自宅</span>
+      <div class="itemvalue">
+        <span id="homeLabel" class="muted">未設定</span>
+        <button id="btnHere" class="link">現在地にする</button>
       </div>
-
-      <div class="field">
-        <span class="label">歩く時間（休憩をのぞく）</span>
-        <div class="seg" id="segTime">
-          <button data-v="30">30分</button><button data-v="45">45分</button><button data-v="60">60分</button><button data-v="90">90分</button>
-        </div>
-      </div>
-
-      <div class="field">
-        <span class="label">寄り道先</span>
-        <div class="seg wrap" id="segStop">
-          <button data-v="cafe">カフェ</button><button data-v="bakery">パン屋</button><button data-v="park">公園</button><button data-v="shrine">神社・お寺</button><button data-v="none">寄らない</button>
-        </div>
-        <div id="candidates" class="candidates"></div>
-      </div>
-
-      <div class="field">
-        <span class="label">お題の間隔</span>
-        <div class="seg" id="segInterval">
-          <button data-v="5">多め</button><button data-v="8">ふつう</button><button data-v="12">少なめ</button>
-        </div>
-      </div>
-
-      <button id="btnMake" class="primary">ルートを作る</button>
-      <p id="planError" class="error" hidden></p>
     </div>
-
-    <div class="panel" id="routeSummary" hidden>
-      <div class="summary">
-        <div><span class="big" id="sumDist">-</span><span class="unit">km</span></div>
-        <div><span class="big" id="sumTime">-</span><span class="unit">分</span></div>
-        <div class="stopname" id="sumStop"></div>
+    <div class="item col">
+      <span class="itemlabel">歩く時間</span>
+      <div class="seg" id="segTime">
+        <button data-v="30">30分</button><button data-v="45">45分</button><button data-v="60">60分</button><button data-v="90">90分</button>
       </div>
-      <p class="hint" id="sumSun"></p>
-      <button id="btnStart" class="primary">出発する</button>
-      <div class="row gap">
-        <button id="btnShare" class="ghost">パートナーに送る</button>
-        <button id="btnReroll" class="ghost">別の道にする</button>
-        <button id="btnSim" class="ghost">家で試す</button>
+    </div>
+    <div class="item col">
+      <span class="itemlabel">寄り道先</span>
+      <div class="seg wrap" id="segStop">
+        <button data-v="cafe">カフェ</button><button data-v="bakery">パン屋</button><button data-v="park">公園</button><button data-v="shrine">神社・お寺</button><button data-v="historic">史跡</button><button data-v="viewpoint">景色のいい所</button><button data-v="books">本屋</button><button data-v="sweets">和菓子屋</button><button data-v="bath">銭湯</button><button data-v="any">おまかせ</button><button data-v="none">なし</button>
       </div>
-      <p class="hint">出発したら画面を閉じてOK。開いたときに、今いる場所と届いたお題が出ます。二人とも同じリンクで出発すると、同じ場所で同じ勝負が届きます。</p>
+      <div id="candidates" class="candidates"></div>
     </div>
-  </section>
-
-  <!-- 散歩中 -->
-  <section id="view-walk" class="view walk" hidden>
-    <div class="row gap">
-      <div id="simBadge" class="simbadge" hidden>試しモード（8倍速）</div>
-      <div id="nightBadge" class="simbadge night" hidden>夜さんぽ・暗い道では立ち止まって画面を見てね</div>
+    <div class="item col">
+      <span class="itemlabel">お題の数</span>
+      <div class="seg" id="segInterval">
+        <button data-v="5">多め</button><button data-v="8">ふつう</button><button data-v="12">少なめ</button>
+      </div>
     </div>
+  </div>
+  <button id="btnMake" class="primary">ルートを作る</button>
+  <p id="planError" class="error" hidden></p>
 
-    <div class="scoreboard" aria-label="今日の勝負">
-      <div class="side me"><span class="who">わたし</span><span class="pts" id="scoreMe">0</span></div>
-      <div class="vs">VS</div>
-      <div class="side you"><span class="who">あいて</span><span class="pts" id="scoreYou">0</span></div>
+  <div class="group" id="routeSummary" hidden>
+    <div class="summary">
+      <div><span class="big" id="sumDist">-</span><span class="unit">km</span></div>
+      <div><span class="big" id="sumTime">-</span><span class="unit">分</span></div>
     </div>
+    <ul class="facts">
+      <li id="sumLoop"></li>
+      <li id="sumStop"></li>
+      <li id="sumSun"></li>
+    </ul>
+    <button id="btnStart" class="primary">出発する</button>
+    <div class="actions">
+      <button id="btnShare" class="secondary">パートナーに送る</button>
+      <button id="btnReroll" class="secondary">別の道にする</button>
+      <button id="btnSim" class="secondary">家で試す</button>
+    </div>
+  </div>
+</section>
 
+<!-- 散歩中：地図が主役 -->
+<section id="view-walk" class="walk" hidden>
+  <div class="walkhead">
+    <div class="turn">
+      <span class="arrow" id="nextArrow">↑</span>
+      <div class="turntext">
+        <b id="nextText">ルートに沿って進もう</b>
+        <span id="nextSub"></span>
+      </div>
+    </div>
+    <div class="remain"><span class="muted">残り</span><b id="statRemain">-</b></div>
+  </div>
+  <div id="badgesRow" class="chips">
+    <span id="simBadge" class="chip warn" hidden>試しモード（8倍速）</span>
+    <span id="nightBadge" class="chip night" hidden>夜さんぽ</span>
+    <span id="offRoute" class="chip warn" hidden>ルートから外れています <button id="btnReroute" class="link">引き直す</button></span>
+  </div>
+
+  <div class="mapwrap" id="mapWrap">
+    <div id="walkMap"></div>
+    <div class="mapbtns">
+      <button class="iconbtn" id="btnHeading" aria-label="地図の向き">↑</button>
+      <button class="iconbtn" id="btnHelp2" aria-label="使い方">？</button>
+    </div>
+    <label class="fab" for="photoInput" id="btnFree" aria-label="写真を撮る">
+      <svg viewBox="0 0 24 24" width="26" height="26" aria-hidden="true"><path fill="currentColor" d="M9 4l-1.5 2H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-3.5L15 4H9zm3 4.5a4.5 4.5 0 1 1 0 9 4.5 4.5 0 0 1 0-9zm0 2a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5z"/></svg>
+    </label>
+  </div>
+
+  <div class="sheet">
     <div id="restCard" class="card rest" hidden>
-      <div class="cardlabel">休憩中</div>
+      <span class="kind">休憩中</span>
       <p id="restText"></p>
       <button id="btnResume" class="primary">出発する</button>
-      <p class="hint">お店から離れると、自動で案内に戻ります</p>
     </div>
-
-    <div id="inbox" class="inbox"></div>
-    <p id="inboxEmpty" class="hint center">次のお題は <b id="nextMissionIn">-</b> 先で届きます</p>
-
-    <div class="next">
-      <div class="arrow" id="nextArrow">↑</div>
-      <div>
-        <div class="nexttext" id="nextText">ルートに沿って進んでください</div>
-        <div class="nextsub" id="nextSub"></div>
+    <div id="missionCard" class="card" hidden>
+      <div class="cardhead"><span class="kind" id="missionKind"></span><span class="muted small" id="missionMore"></span></div>
+      <p id="missionText"></p>
+      <div class="actions">
+        <label class="secondary" for="photoInput" id="btnShoot">撮る</label>
+        <button class="primary" id="btnDone">見つけた</button>
+        <button class="secondary" id="btnNext">次へ</button>
       </div>
     </div>
-
-    <div class="stats">
-      <div><span class="label">残り</span><span id="statRemain" class="num">-</span></div>
-      <div><span class="label">経過</span><span id="statTime" class="num">0分</span></div>
-      <div><span class="label">写真</span><span id="statPhotos" class="num">0枚</span></div>
+    <div id="idleCard" class="card idle">
+      <p class="muted" id="idleText"></p>
     </div>
-
-    <div id="offRoute" class="banner warn" hidden>
-      ルートから外れているようです
-      <button id="btnReroute" class="ghost">ここから道を引き直す</button>
+    <div class="sheetfoot">
+      <div id="thumbs" class="thumbs"></div>
+      <span class="muted small" id="statTime"></span>
+      <button id="btnEnd" class="link danger">終える</button>
     </div>
+  </div>
+</section>
 
-    <div id="walkMap" class="map small"></div>
+<!-- アルバム -->
+<section id="view-album" class="page" hidden>
+  <header class="pagehead"><h1>アルバム</h1></header>
+  <div class="group titlecard">
+    <span class="itemlabel">いまの称号</span>
+    <div class="titlerow"><b id="titleName" class="titlename"></b><span id="titlePts" class="muted"></span></div>
+    <div class="bar"><span id="titleBar"></span></div>
+    <span id="titleNext" class="muted small"></span>
+  </div>
+  <details class="group badges">
+    <summary>バッジ <span id="badgeCount" class="muted"></span></summary>
+    <div id="badgeGrid" class="badgegrid"></div>
+  </details>
+  <h2>散歩の記録</h2>
+  <div id="albumList" class="albumlist"></div>
+</section>
 
-    <div class="row gap">
-      <button id="btnFree" class="ghost">自由に撮る</button>
-      <button id="btnEnd" class="ghost danger">散歩を終える</button>
-    </div>
-  </section>
-
-  <!-- アルバム -->
-  <section id="view-album" class="view" hidden>
-    <h2>アルバム</h2>
-    <div class="titlecard">
-      <span class="label">いまの称号</span>
-      <div class="row"><b id="titleName" class="titlename"></b><span id="titlePts" class="muted"></span></div>
-      <div class="bar"><span id="titleBar"></span></div>
-      <span id="titleNext" class="hint"></span>
-    </div>
-    <div id="albumTotal" class="total" hidden></div>
-    <details class="badges" open>
-      <summary>バッジ <span id="badgeCount" class="muted"></span></summary>
-      <div id="badgeGrid" class="badgegrid"></div>
-    </details>
-    <h2>散歩の記録</h2>
-    <div id="albumList" class="albumlist"></div>
-  </section>
-
-  <section id="view-detail" class="view" hidden>
-    <button id="btnBack" class="ghost">← アルバムに戻る</button>
-    <h2 id="detailTitle"></h2>
-    <p id="detailMeta" class="muted"></p>
-    <div id="detailNight" class="simbadge night" hidden>夜さんぽ</div>
-    <div id="detailResult" class="result" hidden>
-      <div class="resulthead" id="resultHead"></div>
-      <div class="resultscore" id="resultScore"></div>
-      <div class="penalty" id="resultPenalty"></div>
-    </div>
-    <div id="detailNew" class="newbadges" hidden>
-      <div id="newTitle" class="newtitle" hidden></div>
-      <span class="label">この散歩で取ったバッジ</span>
-      <div id="newBadges" class="badgegrid"></div>
-    </div>
-    <div id="detailMap" class="map"></div>
-    <div id="detailPhotos" class="photos"></div>
-  </section>
-</main>
+<section id="view-detail" class="page" hidden>
+  <header class="pagehead"><button id="btnBack" class="link">← アルバム</button></header>
+  <h1 id="detailTitle"></h1>
+  <p id="detailMeta" class="muted"></p>
+  <div id="detailNew" class="group newbadges" hidden>
+    <div id="newTitle" class="newtitle" hidden></div>
+    <span class="itemlabel">この散歩で取ったバッジ</span>
+    <div id="newBadges" class="badgegrid"></div>
+  </div>
+  <div class="mapcard"><div id="detailMap" class="map"></div></div>
+  <div id="detailPhotos" class="photos"></div>
+  <div class="group" id="detailLog">
+    <span class="itemlabel">今日の気づき</span>
+    <ul id="logList" class="log"></ul>
+  </div>
+</section>
 
 <nav class="tabs" id="tabs">
   <button data-tab="plan" class="on">散歩</button>
   <button data-tab="album">アルバム</button>
 </nav>
 
-<input type="file" id="photoInput" accept="image/*" capture="environment" hidden>
+<!-- 写真を大きく見る -->
+<div id="viewer" class="overlay" hidden>
+  <div class="viewerbox">
+    <img id="viewerImg" alt="">
+    <p id="viewerCap"></p>
+    <div class="actions">
+      <button id="btnSavePhoto" class="primary">カメラロールに保存・共有</button>
+      <button id="btnCloseViewer" class="secondary">閉じる</button>
+    </div>
+    <p class="muted small">保存できないときは、写真を長押しして「"写真"に保存」を選んでください</p>
+  </div>
+</div>
+
+<!-- 使い方 -->
+<div id="guide" class="overlay" hidden>
+  <div class="guidebox">
+    <div id="guidePages"></div>
+    <div class="guidenav">
+      <div id="guideDots" class="dots"></div>
+      <button id="btnGuideNext" class="primary">次へ</button>
+    </div>
+    <button id="btnGuideSkip" class="link">閉じる</button>
+  </div>
+</div>
+
+<input type="file" id="photoInput" accept="image/*" capture="environment" class="visually-hidden">
 <div id="toast" class="toast" hidden></div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
-<script src="missions.js?v=5"></script>
-<script src="badges.js?v=5"></script>
-<script src="app.js?v=5"></script>
+<script src="missions.js?v=7"></script>
+<script src="badges.js?v=7"></script>
+<script src="app.js?v=7"></script>
 </body>
 </html>

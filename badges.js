@@ -1,14 +1,14 @@
 // 称号とバッジ。試しモードの散歩は数えない
 
-// 獲得ポイントの合計で上がっていく称号
+// 「気づき」（観察と会話のタネをクリアした数）で上がっていく称号
 const TITLES = [
-  { pts: 0, name: "散歩見習い" },
-  { pts: 10, name: "町歩きビギナー" },
-  { pts: 30, name: "路地裏探検家" },
-  { pts: 60, name: "寄り道の達人" },
-  { pts: 100, name: "散歩マスター" },
-  { pts: 160, name: "町のぬし" },
-  { pts: 250, name: "伝説の散歩人" },
+  { pts: 0, name: "散歩ビギナー" },
+  { pts: 5, name: "よそ見の初心者" },
+  { pts: 15, name: "路地の観察者" },
+  { pts: 30, name: "町の発見家" },
+  { pts: 60, name: "散歩の達人" },
+  { pts: 100, name: "町の語り部" },
+  { pts: 160, name: "散歩の哲学者" },
 ];
 
 // mark はハンコ風に丸で囲んで表示する1文字
@@ -18,54 +18,47 @@ const BADGES = [
   { id: "walk20", mark: "達", name: "散歩が日課", desc: "20回散歩する", need: 20, get: (s) => s.walks },
   { id: "km10", mark: "十", name: "10km達成", desc: "合計10km歩く", need: 10, get: (s) => Math.floor(s.km) },
   { id: "km50", mark: "遠", name: "50km達成", desc: "合計50km歩く", need: 50, get: (s) => Math.floor(s.km) },
-  { id: "win1", mark: "勝", name: "初勝利", desc: "勝負に1回勝ち越す", need: 1, get: (s) => s.wins },
-  { id: "win5", mark: "強", name: "勝負師", desc: "5回勝ち越す", need: 5, get: (s) => s.wins },
-  { id: "streak3", mark: "連", name: "3連勝", desc: "3回続けて勝ち越す", need: 3, get: (s) => s.bestStreak },
-  { id: "perfect", mark: "完", name: "完封", desc: "相手を0点におさえて3点以上で勝つ", need: 1, get: (s) => s.perfects },
-  { id: "comeback", mark: "逆", name: "大逆転", desc: "負けている状態から最後に逆転する", need: 1, get: (s) => s.comebacks },
-  { id: "draw", mark: "和", name: "仲良し引き分け", desc: "同点で散歩を終える", need: 1, get: (s) => s.draws },
-  { id: "rare1", mark: "稀", name: "レアハンター", desc: "レアお題で勝つ", need: 1, get: (s) => s.rareWins },
-  { id: "rare3", mark: "宝", name: "幸運の持ち主", desc: "レアお題で3回勝つ", need: 3, get: (s) => s.rareWins },
-  { id: "allmode", mark: "全", name: "オールラウンダー", desc: "5種類以上の勝負で、それぞれ1回は勝つ", need: 5, get: (s) => s.modesWon },
-  { id: "secret3", mark: "密", name: "名スパイ", desc: "秘密指令で3回勝つ", need: 3, get: (s) => s.secretWins },
-  { id: "coop5", mark: "仲", name: "息ぴったり", desc: "「ふたりで」のお題を5回クリア", need: 5, get: (s) => s.coops },
+  { id: "long", mark: "長", name: "ロングウォーク", desc: "1回で6km以上歩く", need: 1, get: (s) => s.longs },
+  { id: "look10", mark: "視", name: "観察ビギナー", desc: "観察のお題を10回クリア", need: 10, get: (s) => s.looks },
+  { id: "look50", mark: "眼", name: "観察の名人", desc: "観察のお題を50回クリア", need: 50, get: (s) => s.looks },
+  { id: "talk10", mark: "話", name: "語り合い", desc: "会話のタネで10回話す", need: 10, get: (s) => s.talks },
+  { id: "talk30", mark: "語", name: "夜通し語れる", desc: "会話のタネで30回話す", need: 30, get: (s) => s.talks },
+  { id: "philo", mark: "哲", name: "散歩の哲学", desc: "「ちょっと哲学」で5回話す", need: 5, get: (s) => s.cats.philo || 0 },
+  { id: "past", mark: "昔", name: "思い出係", desc: "「むかし話」で5回話す", need: 5, get: (s) => s.cats.past || 0 },
+  { id: "us", mark: "心", name: "ふたりの理解者", desc: "「ふたりのこと」で5回話す", need: 5, get: (s) => s.cats.us || 0 },
+  { id: "full", mark: "皆", name: "皆勤", desc: "1回の散歩で、届いたお題を1つも飛ばさない", need: 1, get: (s) => s.fulls },
   { id: "photo10", mark: "写", name: "撮影係", desc: "写真を合計10枚撮る", need: 10, get: (s) => s.photos },
   { id: "photo50", mark: "匠", name: "散歩カメラマン", desc: "写真を合計50枚撮る", need: 50, get: (s) => s.photos },
   { id: "stop3", mark: "巡", name: "寄り道めぐり", desc: "3か所の違う寄り道先に行く", need: 3, get: (s) => s.stops },
   { id: "stop10", mark: "旅", name: "町の案内人", desc: "10か所の違う寄り道先に行く", need: 10, get: (s) => s.stops },
   { id: "morning", mark: "朝", name: "朝さんぽ", desc: "朝8時より前に出発する", need: 1, get: (s) => s.mornings },
   { id: "night", mark: "夜", name: "夜さんぽ", desc: "日が暮れてから散歩する", need: 1, get: (s) => s.nights },
+  { id: "seasons", mark: "季", name: "四季の散歩", desc: "春・夏・秋・冬それぞれに散歩する", need: 4, get: (s) => s.seasons },
 ];
 
-const BATTLE_MODES = ["secret", "photo", "talk", "hunt", "game", "quiz", "guess", "race"];
-
 function badgeStats(walks) {
-  const list = walks.filter((w) => !w.sim && w.me != null).sort((a, b) => a.startedAt - b.startedAt);
-  const s = { walks: list.length, km: 0, pts: 0, wins: 0, draws: 0, streak: 0, bestStreak: 0, perfects: 0, comebacks: 0, rareWins: 0, secretWins: 0, coops: 0, photos: 0, mornings: 0, nights: 0 };
-  const modes = new Set(), stops = new Set();
+  const list = walks.filter((w) => !w.sim && w.results).sort((a, b) => a.startedAt - b.startedAt);
+  const s = { walks: list.length, km: 0, pts: 0, looks: 0, talks: 0, cats: {}, fulls: 0, longs: 0, photos: 0, mornings: 0, nights: 0 };
+  const stops = new Set(), seasons = new Set();
   for (const w of list) {
     s.km += w.distance / 1000;
-    s.pts += w.me;
     s.photos += w.photos || 0;
+    if (w.distance >= 6000) s.longs++;
     if (w.stopName) stops.add(w.stopName);
-    const h = new Date(w.startedAt).getHours();
+    const d = new Date(w.startedAt), h = d.getHours();
+    seasons.add(seasonKey(d.getMonth() + 1));
     if (h < 8 && h >= 4) s.mornings++;
     if (w.night) s.nights++;
-    if (w.me > w.you) { s.wins++; s.streak++; s.bestStreak = Math.max(s.bestStreak, s.streak); } else s.streak = 0;
-    if (w.me === w.you && w.me > 0) s.draws++;
-    if (w.me >= 3 && w.you === 0) s.perfects++;
-    // 途中で負けていて、最後に勝ち越したら逆転
-    let me = 0, you = 0, behind = false;
-    for (const r of w.results || []) {
-      if (r.outcome === "me") { me += r.pts; if (r.mode === "secret") s.secretWins++; if (r.pts === 3) s.rareWins++; if (BATTLE_MODES.includes(r.mode)) modes.add(r.mode); }
-      if (r.outcome === "you") you += r.pts;
-      if (r.outcome === "done") s.coops++;
-      if (you > me) behind = true;
-    }
-    if (behind && w.me > w.you) s.comebacks++;
+    const done = w.results.filter((r) => r.outcome === "done");
+    done.forEach((r) => {
+      if (r.kind === "look") s.looks++;
+      if (r.kind === "talk") { s.talks++; s.cats[r.cat] = (s.cats[r.cat] || 0) + 1; }
+    });
+    s.pts += done.length;
+    if (w.results.length >= 3 && done.length === w.results.length) s.fulls++;
   }
-  s.modesWon = modes.size;
   s.stops = stops.size;
+  s.seasons = seasons.size;
   return s;
 }
 
