@@ -1,26 +1,27 @@
-/* すっきりシンプル：iPhoneの標準アプリのような、白と緑の落ち着いた画面
-   散歩中は画面いっぱいの地図＋下にお題カード1枚 */
+/* スイス風のミニマル：白に近い地と墨の黒、差し色は青1色。角丸・影・塗りのカードは使わず、細い線と格子で区切る。
+   書体は IBM Plex Sans JP、数字は等幅の IBM Plex Mono。散歩中は画面いっぱいの地図＋下にお題カード1枚 */
 :root {
-  --bg: #f5f6f4;
-  --surface: #ffffff;
-  --fg: #1c211e;
-  --muted: #6b736e;
-  --line: #e2e6e3;
-  --accent: #2e7d5b;
-  --accent-soft: #e6f2ec;
+  --bg: #f7f7f5;
+  --surface: #f7f7f5;
+  --fg: #111111;
+  --muted: #74746f;
+  --line: #dcdcd7;
+  --accent: #1f4fd8;
+  --accent-soft: #e9eefc;
   --accent-fg: #ffffff;
-  --warn: #c0502e;
-  --night: #283a5e;
-  --font: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans JP", "Yu Gothic", sans-serif;
-  --font-logo: "Zen Maru Gothic", "Hiragino Maru Gothic ProN", var(--font);
-  --radius: 14px;
+  --warn: #c2321f;
+  --night: #111111;
+  --font: "IBM Plex Sans JP", "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans JP", sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --font-logo: var(--font);
+  --radius: 0px;
   --tabs-h: 58px;
   color-scheme: light;
 }
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #111412; --surface: #1c201e; --fg: #e9ede9; --muted: #98a19b; --line: #2d332f;
-    --accent: #5cc08f; --accent-soft: #1d3329; --accent-fg: #0b1a12; --warn: #ef8a6b; --night: #8fa7de;
+    --bg: #121212; --surface: #121212; --fg: #f0f0ee; --muted: #9a9a95; --line: #34342f;
+    --accent: #7d9bff; --accent-soft: #1b2340; --accent-fg: #0b0f1d; --warn: #ff7a66; --night: #f0f0ee;
     color-scheme: dark;
   }
 }
@@ -292,3 +293,140 @@ input[type="range"] { width: 100%; accent-color: var(--accent); height: 32px; ma
 .logo .edition { font-family: var(--font); font-size: 12px; font-weight: 600; color: var(--muted); margin-left: 8px; letter-spacing: 0; vertical-align: middle; }
 .photos button[data-who] { position: relative; }
 .photos button[data-who]::after { content: attr(data-who); position: absolute; left: 4px; bottom: 4px; font-size: 10.5px; color: #fff; background: rgb(0 0 0 / .45); padding: 1px 6px; border-radius: 99px; }
+
+
+/* ================= スイス風のミニマル（上の設定を上書き） ================= */
+body { font-size: 15.5px; letter-spacing: .005em; }
+h1 { font-size: 28px; font-weight: 600; letter-spacing: -.01em; }
+h2 { font-size: 13px; font-weight: 500; letter-spacing: .08em; color: var(--muted); margin-top: 14px; }
+.logo { color: var(--fg); font-weight: 600; letter-spacing: -.01em; font-size: 24px; }
+.logo .edition { font-family: var(--mono); font-size: 11px; font-weight: 400; border: 1px solid var(--fg); padding: 1px 6px; color: var(--fg); }
+.big, .remain b, .timelabel, .invite, .candidates .d, #statTime, .ticks, .num, .titlerow .muted, .poilabel { font-family: var(--mono); letter-spacing: -.02em; }
+.itemlabel, .flabel, .kind, .maphint { letter-spacing: .06em; }
+.itemlabel { font-size: 11px; color: var(--muted); }
+
+/* 区切りは線で。カードの塗りと影はなくす */
+.mapcard, .group, .walkitem, .newbadges, .note, .backup, .cloudbox { background: transparent; box-shadow: none; border-radius: 0; }
+.mapcard { border: 1px solid var(--fg); }
+.maphint { border-top: 1px solid var(--fg); font-size: 11px; padding: 6px 10px; }
+.group { border-top: 1px solid var(--fg); padding: 2px 0; }
+.titlecard, .badges, .backup, .cloudbox, #detailLog { padding-left: 0; padding-right: 0; }
+.item { border-bottom-color: var(--line); }
+.note { border: 1px solid var(--fg); }
+.newbadges { border: 1px solid var(--fg); padding: 12px 14px; }
+
+/* ボタン：四角。主なボタンは墨、だいじな操作だけ青 */
+.primary, .secondary, .iconbtn, .seg, .seg button, .chip, .toast, .viewerbox, .guidebox, .field, .memobox textarea, .invite, .bar, .bar span, .photos button, .thumbs button, .walkitem .thumb { border-radius: 0 !important; }
+.primary { background: var(--fg); color: var(--bg); font-weight: 500; letter-spacing: .04em; }
+.secondary { background: transparent; color: var(--fg); border: 1px solid var(--fg); font-weight: 500; }
+.link { color: var(--fg); text-decoration: underline; text-underline-offset: 3px; font-weight: 500; }
+.link.danger { color: var(--warn); }
+button.primary#btnMake, #btnStart { justify-content: space-between; padding: 0 16px; }
+#btnStart { background: var(--accent); color: var(--accent-fg); }
+#btnStart::after, #btnMake::after { content: "→"; font-family: var(--mono); }
+.iconbtn { background: var(--bg); border: 1px solid var(--fg); box-shadow: none; font-weight: 500; width: 38px; height: 38px; }
+
+/* 切り替え：枠つきの格子。選ばれたものは墨で塗る */
+.seg { background: transparent; border: 1px solid var(--fg); padding: 0; gap: 0; }
+.seg button { color: var(--fg); min-height: 38px; font-size: 14px; border-left: 1px solid var(--fg); }
+.seg button:first-child { border-left: 0; }
+.seg button.on { background: var(--fg); color: var(--bg); box-shadow: none; font-weight: 500; }
+.seg.wrap { grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); }
+.seg.wrap button { border-left: 0; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.candidates button.on { color: var(--accent); }
+.candidates button.on::before { content: "● "; font-size: 10px; vertical-align: 2px; }
+input[type="range"] { accent-color: var(--fg); }
+.toggle { border-radius: 0; background: transparent; border: 1px solid var(--fg); width: 46px; height: 26px; }
+.toggle::after { border-radius: 0; top: 3px; left: 3px; width: 18px; height: 18px; background: var(--fg); box-shadow: none; }
+.toggle:checked { background: var(--accent); border-color: var(--accent); }
+.toggle:checked::after { transform: translateX(20px); background: var(--accent-fg); }
+
+/* ルートのまとめ：大きな等幅の数字を、縦線で区切って並べる */
+.summary { gap: 0; padding-top: 6px; border-bottom: 1px solid var(--fg); }
+.summary > div { padding: 6px 18px 6px 0; }
+.summary > div + div { border-left: 1px solid var(--fg); padding-left: 14px; }
+.big { font-size: 36px; font-weight: 500; }
+.facts { list-style: none; padding: 0; margin: 4px 0 10px; }
+.facts li { padding: 7px 0; border-bottom: 1px solid var(--line); font-size: 13.5px; color: var(--fg); }
+
+/* 散歩中 */
+.walkhead { background: var(--bg); color: var(--fg); border-bottom: 1px solid var(--fg); padding-bottom: 8px; }
+.turn .arrow { font-size: 26px; width: 30px; }
+.turntext b { font-size: 22px; font-weight: 600; letter-spacing: -.01em; }
+.turntext span { opacity: 1; color: var(--muted); font-size: 12px; }
+.remain .muted { color: var(--muted); opacity: 1; font-family: var(--font); letter-spacing: .06em; font-size: 10.5px; }
+.remain b { font-size: 18px; font-weight: 500; }
+.walkhead.alert { animation: turnflash-swiss .45s ease-in-out 4; }
+@keyframes turnflash-swiss { 50% { background: var(--accent); color: var(--accent-fg); } }
+.chips { top: calc(70px + env(safe-area-inset-top, 0px)); }
+.chip { background: var(--bg); box-shadow: none; border: 1px solid var(--fg); font-size: 12px; padding: 2px 8px; }
+.chip.night, .chip.meet { background: var(--fg); color: var(--bg); }
+.chip.warn { border-color: var(--warn); }
+.fab { border-radius: 0; background: var(--fg); color: var(--bg); box-shadow: none; width: 52px; height: 52px; }
+.mapwrap, .maplibregl-map { background: #ececea; }
+.sheet { border-radius: 0; box-shadow: none; border-top: 1px solid var(--fg); background: var(--bg); padding-top: 12px; }
+.card p { font-size: 19px; font-weight: 500; line-height: 1.55; letter-spacing: -.005em; }
+.cardhead { border-bottom: 1px solid var(--line); padding-bottom: 6px; }
+.kind, .kind.talk, .kind.theme, .kind.split, .kind.choose { color: var(--accent); font-size: 11.5px; font-weight: 600; }
+.card p.tip { font-size: 13px; border-left: 1px solid var(--fg); padding-left: 10px; }
+#missionActions { gap: 0; border: 1px solid var(--fg); }
+#missionActions > * { border: 0; border-left: 1px solid var(--fg); background: transparent; color: var(--fg); min-height: 46px; }
+#missionActions > *:first-child { border-left: 0; }
+#missionActions > [hidden] + * { border-left: 0; }
+#btnDone { background: var(--accent); color: var(--accent-fg); }
+.memobox textarea, .field { background: transparent; border: 1px solid var(--fg); }
+.splitbox #btnBranchA { background: var(--accent); }
+.splitbox #btnBranchB { background: var(--fg); color: var(--bg); }
+.sheetfoot { border-top-color: var(--fg); }
+#restCard { border: 0; }
+.rest .kind { color: var(--accent); }
+
+/* アルバム */
+.titlecard { border-top: 1px solid var(--fg); }
+.titlename { color: var(--fg); font-weight: 600; }
+.bar { height: 3px; background: var(--line); }
+.bar span { background: var(--accent); }
+.badges summary { font-weight: 500; font-size: 13px; letter-spacing: .06em; }
+.badge .seal { border-radius: 50%; border: 1px dashed var(--line); font-weight: 500; }
+.badge.on .seal { border: 1px solid var(--fg); background: transparent; color: var(--fg); }
+.newbadges .newtitle { color: var(--accent); }
+.walkitem { padding: 10px 0; border-bottom: 1px solid var(--line); grid-template-columns: 58px 1fr; }
+.walkitem .thumb { width: 58px; height: 58px; }
+.albumlist { gap: 0; border-top: 1px solid var(--fg); }
+.photos { gap: 2px; }
+.log { list-style: none; padding-left: 0; }
+.log li { border-bottom: 1px solid var(--line); padding-bottom: 6px; }
+.log .memo { color: var(--accent); }
+.invite { background: transparent; border: 1px solid var(--fg); color: var(--fg); }
+
+/* 下のタブ */
+.tabs { background: var(--bg); backdrop-filter: none; border-top: 1px solid var(--fg); padding-top: 0; }
+.tabs button { color: var(--muted); font-weight: 500; letter-spacing: .06em; border-top: 2px solid transparent; }
+.tabs button.on { color: var(--fg); border-top-color: var(--fg); }
+
+/* 重ねて出す画面 */
+.overlay { background: rgb(0 0 0 / .45); }
+.viewerbox, .guidebox { border: 1px solid var(--fg); background: var(--bg); }
+.guidepage .step { font-family: var(--mono); color: var(--muted); font-weight: 400; }
+.guidepage h3 { font-weight: 600; letter-spacing: -.01em; }
+.guidepage .pic { background: transparent; border: 1px solid var(--fg); color: var(--fg); font-weight: 500; }
+.dots span { border-radius: 0; width: 14px; height: 2px; }
+.dots span.on { background: var(--fg); }
+.toast { background: var(--fg); color: var(--bg); }
+
+/* 地図の上の印：白地に墨の線。自分は墨、写真は青 */
+.homedot { background: var(--fg); border-color: #fff; }
+.cand { background: #fff; border: 1.5px solid #111; box-shadow: none; }
+.cand.on { background: #1f4fd8; border-color: #fff; }
+.photodot { background: #1f4fd8; border-color: #fff; box-shadow: none; }
+.poi, .poi.history, .poi.art, .poi.nature, .poi.shop { background: #fff; color: #111; border: 1.5px solid #111; box-shadow: none; font-weight: 500; }
+.poi.history { border-radius: 0; }
+.poi.nature { border-radius: 50% 50% 50% 0; }
+.pin { background: #111; border-radius: 0; box-shadow: none; font-weight: 500; letter-spacing: .02em; }
+.pin.meet { background: #1f4fd8; }
+.pin.fork { background: #fff; color: #111; border: 1px solid #111; }
+.maplibregl-popup-content { border-radius: 0; border: 1px solid #111; box-shadow: none; }
+.poipop button { border-radius: 0; background: #111; }
+.poipop a { color: #1f4fd8; }
+/* 地図の向きのボタンは回転するので、方位磁針として丸くする */
+#btnHeading { border-radius: 50% !important; }

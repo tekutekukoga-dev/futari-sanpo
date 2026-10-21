@@ -161,8 +161,9 @@ let walk = null;
 
 // ---------- 地図 ----------
 // ベクター地図（OpenFreeMap）。文字がくっきりして、回転しても地名がまっすぐ読める
-const MAP_STYLE = "https://tiles.openfreemap.org/styles/liberty";
-const ROUTE_COLOR = "#2b6cb0", TRACK_COLOR = "#e0791a";
+// 色数の少ない淡いグレーの地図（スイス風の見た目に合わせる）
+const MAP_STYLE = "https://tiles.openfreemap.org/styles/positron";
+const ROUTE_COLOR = "#1f4fd8", TRACK_COLOR = "#111111";
 const ll = (p) => [p[1], p[0]]; // [緯度, 経度] → MapLibreの[経度, 緯度]
 const lineData = (coords) => ({ type: "Feature", properties: {}, geometry: { type: "LineString", coordinates: coords.map(ll) } });
 function boundsOf(coords) {
@@ -743,7 +744,7 @@ function overlapRatio(route, ignore = []) {
 }
 
 // ---------- 別行動（二手に分かれて合流） ----------
-const BRANCH_B_COLOR = "#8e5bd0";
+const BRANCH_B_COLOR = "#111111";
 // ルートのうち、along a〜b の区間だけを取り出す
 function sliceCoords(route, a, b) {
   const out = [pointAt(route, a)];
@@ -894,7 +895,7 @@ function showSummary() {
   $("#sumPois").textContent = r.pois ? (r.pois.length ? `ルート沿いに、ちょっと見たい場所が${r.pois.length}か所あります（地図の丸いマーク）` : "") : "ルート沿いの見どころを探しています…";
   if (r.split) {
     const sp = r.split, mA = Math.round(sp.lenA / WALK_SPEED / 60), mB = Math.round(sp.lenB / WALK_SPEED / 60);
-    $("#sumSplit").textContent = `途中の「分かれ道」から二手に分かれ、${mA === mB ? `どちらも約${mA}分` : `約${Math.min(mA, mB)}〜${Math.max(mA, mB)}分`}歩いて「${sp.meetName}」で合流します（青と紫の道）` +
+    $("#sumSplit").textContent = `途中の「分かれ道」から二手に分かれ、${mA === mB ? `どちらも約${mA}分` : `約${Math.min(mA, mB)}〜${Math.max(mA, mB)}分`}歩いて「${sp.meetName}」で合流します（青と黒の道）` +
       (isNightWalk(Date.now(), r.total / WALK_SPEED / 60, plan.home) ? "。日が暮れているので、明るい道を選んで気をつけて歩いてください" : "");
   } else $("#sumSplit").textContent = "";
   const tk = themeKey(plan.seed);
@@ -1009,7 +1010,7 @@ async function loadShared() {
     $("#planForm").hidden = true; $("#btnMake").hidden = true;
     planMap.jumpTo({ center: ll(plan.home), zoom: 15 });
     if (p.sp) {
-      // 別行動のルートは、2本の経由地をそのまま使って同じ道にする。リンクを開いた人には紫の道をすすめる
+      // 別行動のルートは、2本の経由地をそのまま使って同じ道にする。リンクを開いた人には黒の道をすすめる
       const A = shapeRoute(await osrm(p.sp.wA, true), p.sp.wA, p.sp.si ?? null), B = shapeRoute(await osrm(p.sp.wB, true), p.sp.wB, p.sp.si ?? null);
       plan.route = composeSplit(A, B, { meetName: p.sp.n, meetPos: p.sp.p, minutes: p.sp.min, wA: p.sp.wA, wB: p.sp.wB, stopIndex: p.sp.si ?? null });
       plan.split = p.sp.min; plan.role = "B";
@@ -1215,7 +1216,7 @@ function resumeWalkSession() {
 }
 function drawWalkRoute() {
   if (!walkMap || !walkMap.isReady) return;
-  // 別行動：選ぶ前は紫の道を、選んだあとは相手の道を灰色の点線で出す。合流したら消す
+  // 別行動：選ぶ前は黒の道を、選んだあとは相手の道を灰色の点線で出す。合流したら消す
   clearRoute(walkMap, "routeB");
   if (walk.split && !walk.met) {
     const sp = walk.split;
@@ -1345,7 +1346,7 @@ function onPosition(p) {
 // ---------- 別行動の流れ ----------
 function branchInfo(which) {
   const sp = walk.split, w = which === "B" ? sp.wB : sp.wA, len = which === "B" ? sp.lenB : sp.lenA;
-  return { dir: dir8(bearing(w[1], w[2])), min: Math.max(1, Math.round(len / WALK_SPEED / 60)), color: which === "B" ? "紫" : "青", len };
+  return { dir: dir8(bearing(w[1], w[2])), min: Math.max(1, Math.round(len / WALK_SPEED / 60)), color: which === "B" ? "黒" : "青", len };
 }
 function offerBranches() {
   walk.inbox = walk.inbox.filter((m) => m.kind !== "choose");
@@ -1358,7 +1359,7 @@ function chooseBranch(which) {
   walk.inbox = walk.inbox.filter((m) => m.kind !== "choose");
   walk.branch = which;
   if (which === "B") {
-    // 紫の道に乗り換える。まだ届いていないお題の位置も、紫の道に合わせて付け替える
+    // 黒の道に乗り換える。まだ届いていないお題の位置も、黒の道に合わせて付け替える
     walk.events.slice(walk.eventIdx).forEach((e) => {
       if (e.at <= sp.startAlong) return;
       e.at = e.at <= sp.meetAlongA ? sp.startAlong + (e.at - sp.startAlong) * (sp.lenB / sp.lenA) : e.at + (sp.meetAlongB - sp.meetAlongA);

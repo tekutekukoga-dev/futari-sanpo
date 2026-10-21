@@ -3,3 +3,5 @@
 infra/allowed-emails.txt
 cloud-config.js
 dist-couple/
+ui-mockups.html
+ui-mockups-2.html
