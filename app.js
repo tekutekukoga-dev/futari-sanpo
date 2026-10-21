@@ -153,24 +153,71 @@ const plan = {
 let walk = null;
 
 // ---------- 地図 ----------
-const tileUrl = "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png";
-const tileOpt = { maxZoom: 19, attribution: "&copy; OpenStreetMap" };
-// 地図タイルは明るいままなので、線の色はテーマによらず濃い色で固定する
-const ROUTE_COLOR = "#1d5c8f", TRACK_COLOR = "#e0791a";
-function makeMap(el, opts = {}) {
-  const m = L.map(el, { zoomControl: false, attributionControl: true, ...opts }).setView(plan.home || [35.681, 139.767], plan.home ? 15 : 12);
-  L.tileLayer(tileUrl, tileOpt).addTo(m);
+// ベクター地図（OpenFreeMap）。文字がくっきりして、回転しても地名がまっすぐ読める
+const MAP_STYLE = "https://tiles.openfreemap.org/styles/liberty";
+const ROUTE_COLOR = "#2b6cb0", TRACK_COLOR = "#e0791a";
+const ll = (p) => [p[1], p[0]]; // [緯度, 経度] → MapLibreの[経度, 緯度]
+const lineData = (coords) => ({ type: "Feature", properties: {}, geometry: { type: "LineString", coordinates: coords.map(ll) } });
+function boundsOf(coords) {
+  const b = new maplibregl.LngLatBounds();
+  coords.forEach((p) => b.extend(ll(p)));
+  return b;
+}
+function mkEl(cls, text) { const e = document.createElement("div"); e.className = cls; if (text) e.textContent = text; return e; }
+function htmlMarker(m, pos, el, opts = {}) { return new maplibregl.Marker({ element: el, ...opts }).setLngLat(ll(pos)).addTo(m); }
+
+function makeMap(container, opts = {}) {
+  const m = new maplibregl.Map({
+    container, style: MAP_STYLE, center: ll(plan.home || [35.681, 139.767]), zoom: plan.home ? 15 : 12,
+    attributionControl: { compact: true }, dragRotate: false, pitchWithRotate: false, touchPitch: false, ...opts,
+  });
+  m.touchZoomRotate.disableRotation();
+  // 描画を待たず、スタイルを読み終えた時点で線や印を置けるようにする
+  m.ready = new Promise((res) => m.once("style.load", () => { localizeLabels(m); addArrowImage(m); m.isReady = true; res(); }));
   return m;
 }
-const dot = (color, r = 8) => ({ radius: r, color: "#fff", weight: 3, fillColor: color, fillOpacity: 1 });
-const arrowSvg = (b, color) => `<svg viewBox="0 0 18 18" style="transform:rotate(${b}deg)"><path d="M9 1.5 15.5 15 9 11.5 2.5 15Z" fill="${color}" stroke="#fff" stroke-width="1.6" stroke-linejoin="round"/></svg>`;
-// ルートの上に、進む向きの矢印を一定間隔で置く
-function addDirArrows(layer, route, every = 220) {
-  for (let at = 120; at < route.total - 60; at += every) {
-    const p = pointAt(route, at), q = pointAt(route, at + 15);
-    L.marker(p, { icon: L.divIcon({ className: "dir", html: arrowSvg(bearing(p, q), ROUTE_COLOR), iconSize: [18, 18] }), interactive: false, keyboard: false }).addTo(layer);
-  }
+// 地名は日本語の名前を優先して出す（番地や道路番号のラベルはそのまま）。
+// 地図にもともと入っているお店などのアイコンは消して、こちらで選んだ場所のマークを目立たせる（駅は残す）
+function localizeLabels(m) {
+  m.getStyle().layers.forEach((l) => {
+    if (/^poi_r/.test(l.id)) { try { m.setLayoutProperty(l.id, "visibility", "none"); } catch {} return; }
+    const tf = l.type === "symbol" && l.layout && l.layout["text-field"];
+    if (tf && JSON.stringify(tf).includes("name")) {
+      try { m.setLayoutProperty(l.id, "text-field", ["coalesce", ["get", "name:ja"], ["get", "name"]]); } catch {}
+    }
+  });
 }
+// ルートの上に並べる、進む向きの白い矢印
+function addArrowImage(m) {
+  const s = 32, c = document.createElement("canvas"); c.width = c.height = s;
+  const g = c.getContext("2d");
+  g.beginPath(); g.moveTo(25, 16); g.lineTo(9, 7); g.lineTo(13, 16); g.lineTo(9, 25); g.closePath();
+  g.fillStyle = "#fff"; g.fill();
+  m.addImage("route-arrow", g.getImageData(0, 0, s, s), { pixelRatio: 2 });
+}
+function setRoute(m, coords, id = "route") {
+  if (!m.isReady) return;
+  const data = lineData(coords);
+  if (m.getSource(id)) return m.getSource(id).setData(data);
+  m.addSource(id, { type: "geojson", data });
+  const layout = { "line-join": "round", "line-cap": "round" };
+  m.addLayer({ id: id + "-casing", type: "line", source: id, layout, paint: { "line-color": "#ffffff", "line-width": 10, "line-opacity": 0.9 } });
+  m.addLayer({ id: id + "-line", type: "line", source: id, layout, paint: { "line-color": ROUTE_COLOR, "line-width": 6 } });
+  m.addLayer({ id: id + "-arrows", type: "symbol", source: id, layout: { "symbol-placement": "line", "symbol-spacing": 70, "icon-image": "route-arrow", "icon-allow-overlap": true, "icon-ignore-placement": true, "icon-rotation-alignment": "map" } });
+}
+function clearRoute(m, id = "route") {
+  if (!m.isReady) return;
+  [id + "-arrows", id + "-line", id + "-casing"].forEach((l) => m.getLayer(l) && m.removeLayer(l));
+  if (m.getSource(id)) m.removeSource(id);
+}
+function setTrack(m, coords) {
+  if (!m.isReady || !coords.length) return;
+  const data = lineData(coords.length > 1 ? coords : [coords[0], coords[0]]);
+  if (m.getSource("track")) return m.getSource("track").setData(data);
+  m.addSource("track", { type: "geojson", data });
+  m.addLayer({ id: "track-line", type: "line", source: "track", layout: { "line-join": "round", "line-cap": "round" }, paint: { "line-color": TRACK_COLOR, "line-width": 5 } });
+}
+
 function pointAt(route, along) {
   const { coords, cum } = route;
   let i = cum.findIndex((c) => c >= along);
@@ -189,27 +236,238 @@ function loopInfo(route) {
   return { clockwise: area < 0, first: dir8(bearing(route.coords[0], pointAt(route, 200))) };
 }
 
-let planMap, planLayer;
+// ---------- ちらっと見たい場所 ----------
+// ルート沿い120m以内の、歴史・アート・自然・個性的なお店を地図に出す
+const POI_GROUPS = { history: { mark: "史", label: "歴史" }, art: { mark: "芸", label: "アート" }, nature: { mark: "緑", label: "自然" }, shop: { mark: "店", label: "お店" } };
+const HISTORIC = { memorial: "記念碑", monument: "記念碑", wayside_shrine: "祠", wayside_cross: "道しるべ", boundary_stone: "境界石", milestone: "道しるべ", castle: "城跡", ruins: "遺構", archaeological_site: "遺跡", building: "歴史的な建物", tomb: "墓所", board: "説明板" };
+const ARTWORK = { statue: "像", sculpture: "彫刻", mural: "壁画", installation: "オブジェ", relief: "レリーフ" };
+const TOURISM = { attraction: ["art", "名所"], museum: ["art", "博物館"], gallery: ["art", "ギャラリー"], viewpoint: ["nature", "眺めのいい場所"] };
+const SHOPS = { books: "本屋", second_hand: "古道具", antiques: "骨董", confectionery: "菓子", pastry: "洋菓子", tea: "お茶", coffee: "コーヒー豆", craft: "工芸", deli: "惣菜", art: "画廊", frame: "額縁", musical_instrument: "楽器", bakery: "パン屋", ice_cream: "アイス" };
+function poiKind(t) {
+  if (t.historic) return ["history", HISTORIC[t.historic] || "史跡"];
+  if (t.tourism === "artwork") return ["art", ARTWORK[t.artwork_type] || "アート"];
+  if (TOURISM[t.tourism]) return TOURISM[t.tourism];
+  if (t.natural === "tree") return ["nature", "名木"];
+  if (t.natural === "spring") return ["nature", "湧き水"];
+  if (t.man_made === "water_well") return ["nature", "井戸"];
+  if (t.amenity === "public_bath") return ["shop", "銭湯"];
+  if (t.amenity === "marketplace") return ["shop", "市場"];
+  if (t.amenity === "cafe") return ["shop", "喫茶店"];
+  if (SHOPS[t.shop]) return ["shop", SHOPS[t.shop]];
+  // Wikipediaに載っている寺社・庭園・建物は「名所」として出す（駅や学校などは出さない）
+  if (t.wikidata && !t.railway && !t.highway && !t.public_transport && !t.office && !["school", "university", "college", "hospital", "townhall", "police"].includes(t.amenity)) {
+    if (t.amenity === "place_of_worship") return ["history", "寺社"];
+    if (["park", "garden"].includes(t.leisure)) return ["nature", "庭園・公園"];
+    if (t.building) return ["art", "名所"];
+  }
+  return null;
+}
+function routeDistance(route, p) {
+  let d = Infinity;
+  for (let i = 1; i < route.coords.length; i++) d = Math.min(d, project(p, route.coords[i - 1], route.coords[i]).d);
+  return d;
+}
+// 種類ごとに上限を決めて、お寺ばかり・お店ばかりにならないようにする。ルートに近いものから選ぶ
+const GROUP_CAP = { history: 12, art: 10, nature: 8, shop: 12 };
+const LABEL_CAP = { 寺社: 5, 説明板: 4, 喫茶店: 5, 菓子: 4, パン屋: 3 };
+function tidyPois(route, list) {
+  const seen = new Set(), byGroup = {}, byLabel = {};
+  return list
+    .filter((p) => p.group && p.name !== p.label && !seen.has(p.name) && seen.add(p.name))
+    .map((p) => ({ ...p, d: routeDistance(route, p.pos) }))
+    .filter((p) => p.d < 120)
+    .sort((a, b) => (b.wiki ? 1 : 0) - (a.wiki ? 1 : 0) || a.d - b.d)
+    .filter((p) => {
+      if ((byGroup[p.group] || 0) >= GROUP_CAP[p.group] || (byLabel[p.label] || 0) >= (LABEL_CAP[p.label] || 99)) return false;
+      byGroup[p.group] = (byGroup[p.group] || 0) + 1; byLabel[p.label] = (byLabel[p.label] || 0) + 1;
+      return true;
+    });
+}
+async function findPois(route) {
+  const step = Math.max(1, Math.ceil(route.coords.length / 80));
+  const line = route.coords.filter((_, i) => i % step === 0).concat([route.coords[route.coords.length - 1]])
+    .map((p) => `${p[0].toFixed(5)},${p[1].toFixed(5)}`).join(",");
+  const A = `(around:120,${line})`;
+  const q = `[out:json][timeout:20];(
+nwr["historic"]${A};
+nwr["tourism"~"^(artwork|attraction|museum|gallery|viewpoint)$"]${A};
+nwr["natural"~"^(tree|spring)$"]["name"]${A};
+nwr["man_made"="water_well"]${A};
+nwr["amenity"~"^(public_bath|marketplace)$"]${A};
+nwr["amenity"="cafe"]["name"][!"brand"]${A};
+nwr["shop"~"^(${Object.keys(SHOPS).join("|")})$"]["name"][!"brand"]${A};
+nwr["wikidata"]["name"]${A};
+);out tags center 250;`;
+  for (const url of [OVERPASS]) {
+    try {
+      const res = await fetch(url, { method: "POST", body: "data=" + encodeURIComponent(q), headers: { "Content-Type": "application/x-www-form-urlencoded" }, signal: AbortSignal.timeout(12000) });
+      if (!res.ok) continue;
+      const data = await res.json();
+      return tidyPois(route, data.elements.map((e) => {
+        const t = e.tags || {}, k = poiKind(t);
+        if (!k) return {};
+        const wiki = t.wikipedia && /^ja:/.test(t.wikipedia) ? "https://ja.wikipedia.org/wiki/" + encodeURIComponent(t.wikipedia.slice(3)) : null;
+        return { id: e.type[0] + e.id, group: k[0], label: k[1], name: t["name:ja"] || t.name || k[1], wiki, pos: e.lat != null ? [e.lat, e.lon] : [e.center.lat, e.center.lon] };
+      }));
+    } catch {}
+  }
+  throw new Error("overpass");
+}
+// 地図タイル（ベクター形式）から、ルート周辺の場所を直接読み取る。
+// 地図と同じサーバーなので速く、検索サービスが混んでいても使える
+const CHAIN_CAFE = /スターバックス|Starbucks|ドトール|タリーズ|コメダ|エクセルシオール|サンマルク|ベローチェ|ルノアール|星乃珈琲|プロント|PRONTO|上島珈琲|クリエ|マクドナルド|ミスタードーナツ|ブルーボトル|Blue Bottle|モスバーガー/;
+let tileUrlTemplate = null;
+async function poiTileUrl() {
+  if (!tileUrlTemplate) tileUrlTemplate = (await getJson("https://tiles.openfreemap.org/planet")).tiles[0];
+  return tileUrlTemplate;
+}
+// Mapbox Vector Tile（protobuf）のうち、指定したレイヤーの「点」だけを取り出す最小限の読み取り
+function decodeTilePoints(bytes, layerName, z, tx, ty) {
+  const out = [], td = new TextDecoder();
+  let p = 0;
+  const varint = () => { let r = 0, sh = 0, b; do { b = bytes[p++]; r += (b & 0x7f) * 2 ** sh; sh += 7; } while (b & 0x80); return r; };
+  const skip = (wt) => { if (wt === 0) varint(); else if (wt === 1) p += 8; else if (wt === 2) p += varint(); else if (wt === 5) p += 4; };
+  const str = () => { const l = varint(), v = td.decode(bytes.subarray(p, p + l)); p += l; return v; };
+  const zz = (n) => (n % 2 ? -(n + 1) / 2 : n / 2);
+  while (p < bytes.length) {
+    const tag = varint();
+    if (tag >> 3 !== 3 || (tag & 7) !== 2) { skip(tag & 7); continue; }
+    const end = varint() + p;
+    let name = "", extent = 4096;
+    const keys = [], values = [], feats = [];
+    while (p < end) {
+      const t = varint(), f = t >> 3;
+      if (f === 1) name = str();
+      else if (f === 2) { const l = varint(); feats.push([p, p + l]); p += l; }
+      else if (f === 3) keys.push(str());
+      else if (f === 4) {
+        const ve = varint() + p; let v = null;
+        while (p < ve) {
+          const t3 = varint(), f3 = t3 >> 3;
+          if (f3 === 1) v = str();
+          else if (f3 === 4 || f3 === 5) v = varint();
+          else if (f3 === 6) v = zz(varint());
+          else if (f3 === 7) v = !!varint();
+          else skip(t3 & 7);
+        }
+        values.push(v);
+      } else if (f === 5) extent = varint();
+      else skip(t & 7);
+    }
+    if (name === layerName) {
+      const n = 2 ** z;
+      feats.forEach(([fs, fe]) => {
+        p = fs;
+        const props = {}; let type = 0, gx = null, gy = null;
+        while (p < fe) {
+          const t = varint(), f = t >> 3;
+          if (f === 2) { const te = varint() + p; while (p < te) { const k = varint(), v = varint(); props[keys[k]] = values[v]; } }
+          else if (f === 3) type = varint();
+          else if (f === 4) { const ge = varint() + p; if ((varint() & 7) === 1) { gx = zz(varint()); gy = zz(varint()); } p = ge; }
+          else skip(t & 7);
+        }
+        if (type === 1 && gx != null) {
+          const lon = (tx + gx / extent) / n * 360 - 180;
+          const lat = deg(Math.atan(Math.sinh(Math.PI * (1 - 2 * (ty + gy / extent) / n))));
+          out.push({ props, lat, lon });
+        }
+      });
+    }
+    p = end;
+  }
+  return out;
+}
+function tileTags(pr) {
+  const sub = pr.subclass, cls = pr.class;
+  if (HISTORIC[sub]) return { historic: sub };
+  if (sub === "artwork" || TOURISM[sub]) return { tourism: sub };
+  if (SHOPS[sub]) return { shop: sub };
+  if (["public_bath", "marketplace"].includes(sub)) return { amenity: sub };
+  if (sub === "cafe" && pr.name && !CHAIN_CAFE.test(pr.name)) return { amenity: "cafe" };
+  if (cls === "place_of_worship" && pr.name) return { wikidata: "tile", amenity: "place_of_worship" };
+  if (sub === "garden" && pr.name) return { wikidata: "tile", leisure: "garden" };
+  if (cls === "information" && sub === "board" && pr.name) return { historic: "board" };
+  return {};
+}
+async function poisFromTiles(route) {
+  const z = 14, n = 2 ** z;
+  const lats = route.coords.map((c) => c[0]), lons = route.coords.map((c) => c[1]);
+  const pad = 0.0015;
+  const tx = (lon) => Math.floor((lon + 180) / 360 * n);
+  const ty = (lat) => Math.floor((1 - Math.log(Math.tan(rad(lat)) + 1 / Math.cos(rad(lat))) / Math.PI) / 2 * n);
+  const x0 = tx(Math.min(...lons) - pad), x1 = tx(Math.max(...lons) + pad);
+  const y0 = ty(Math.max(...lats) + pad), y1 = ty(Math.min(...lats) - pad);
+  if ((x1 - x0 + 1) * (y1 - y0 + 1) > 30) return [];
+  const url = await poiTileUrl();
+  const jobs = [];
+  for (let x = x0; x <= x1; x++) for (let y = y0; y <= y1; y++) {
+    jobs.push(fetch(url.replace("{z}", z).replace("{x}", x).replace("{y}", y), { signal: AbortSignal.timeout(10000) })
+      .then((r) => (r.ok ? r.arrayBuffer() : null))
+      .then((buf) => (buf ? decodeTilePoints(new Uint8Array(buf), "poi", z, x, y) : []))
+      .catch(() => []));
+  }
+  const pts = (await Promise.all(jobs)).flat();
+  return tidyPois(route, pts.map(({ props: pr, lat, lon }) => {
+    const k = poiKind(tileTags(pr));
+    if (!k) return {};
+    return { id: "t" + lat.toFixed(5) + lon.toFixed(5), group: k[0], label: k[1], name: pr["name:ja"] || pr.name || k[1], wiki: null, pos: [lat, lon] };
+  }));
+}
+// まず地図タイルからすぐに出し、検索サービスが答えたら詳しい情報（Wikipedia・名木・井戸など）を足す
+async function loadPois(route) {
+  const show = (pois) => {
+    route.pois = pois;
+    if (plan.route === route) {
+      $("#sumPois").textContent = pois.length ? `ルート沿いに、ちょっと見たい場所が${pois.length}か所あります（地図の丸いマーク）` : "";
+      drawPlan(false);
+    }
+    if (walk && walk.route === route) drawWalkRoute();
+  };
+  const detailed = findPois(route).catch(() => null);
+  const quick = await poisFromTiles(route).catch(() => []);
+  show(quick);
+  const more = await detailed;
+  if (more && more.length) show(tidyPois(route, [...more, ...quick]));
+}
+function drawPois(m, pois, bucket) {
+  (pois || []).forEach((p) => {
+    const e = mkEl("poi " + p.group, POI_GROUPS[p.group].mark);
+    e.setAttribute("aria-label", p.name);
+    e.addEventListener("click", (ev) => { ev.stopPropagation(); showPoi(m, p); });
+    bucket.push(htmlMarker(m, p.pos, e));
+  });
+}
+function showPoi(m, p) {
+  const box = mkEl("poipop");
+  box.append(mkEl("poiname", p.name), mkEl("poilabel", `${POI_GROUPS[p.group].label}・${p.label}`));
+  if (p.wiki) { const a = document.createElement("a"); a.href = p.wiki; a.target = "_blank"; a.rel = "noopener"; a.textContent = "Wikipediaで読む"; box.append(a); }
+  new maplibregl.Popup({ offset: 16, closeButton: false, maxWidth: "240px" }).setLngLat(ll(p.pos)).setDOMContent(box).addTo(m);
+}
+
+let planMap, planMarkers = [];
 function initPlanMap() {
   planMap = makeMap($("#planMap"));
-  planLayer = L.layerGroup().addTo(planMap);
-  planMap.on("click", (e) => { if (!plan.shared) setHome([e.latlng.lat, e.latlng.lng]); });
+  planMap.on("click", (e) => { if (!plan.shared) setHome([e.lngLat.lat, e.lngLat.lng]); });
   drawPlan();
 }
-function drawPlan() {
-  planLayer.clearLayers();
+async function drawPlan(fit = true) {
+  await planMap.ready;
+  planMarkers.forEach((mk) => mk.remove()); planMarkers = [];
   if (plan.route) {
-    const line = L.polyline(plan.route.coords, { color: ROUTE_COLOR, weight: 6, opacity: 0.85 }).addTo(planLayer);
-    addDirArrows(planLayer, plan.route);
-    planMap.fitBounds(line.getBounds(), { padding: [24, 24] });
-  }
+    setRoute(planMap, plan.route.coords);
+    if (fit) planMap.fitBounds(boundsOf(plan.route.coords), { padding: 36, animate: false });
+    drawPois(planMap, plan.route.pois, planMarkers);
+  } else clearRoute(planMap);
   plan.candidates.forEach((c) => {
     const on = plan.chosen && plan.chosen.id === c.id;
-    L.circleMarker(c.pos, dot(on ? TRACK_COLOR : "#8a968f", on ? 9 : 6)).bindTooltip(c.name).addTo(planLayer)
-      .on("click", () => chooseCandidate(c));
+    const e = mkEl("cand" + (on ? " on" : "")); e.title = c.name;
+    e.addEventListener("click", (ev) => { ev.stopPropagation(); chooseCandidate(c); });
+    planMarkers.push(htmlMarker(planMap, c.pos, e));
   });
-  if (plan.home) L.marker(plan.home, { icon: L.divIcon({ className: "", html: `<span class="pin">${plan.route ? "スタート・ゴール" : "自宅"}</span>`, iconSize: null, iconAnchor: [0, 26] }) }).addTo(planLayer);
-  if (plan.home) L.circleMarker(plan.home, dot(ROUTE_COLOR, 8)).addTo(planLayer);
+  if (plan.home) {
+    planMarkers.push(htmlMarker(planMap, plan.home, mkEl("homedot")));
+    planMarkers.push(htmlMarker(planMap, plan.home, mkEl("pin", plan.route ? "スタート・ゴール" : "自宅"), { anchor: "bottom", offset: [0, -10] }));
+  }
 }
 
 // ---------- ルート作成 ----------
@@ -219,7 +477,7 @@ function setHome(p) {
   $("#homeLabel").classList.remove("muted");
   plan.candidates = []; plan.chosen = null; plan.route = null;
   $("#candidates").innerHTML = ""; $("#routeSummary").hidden = true;
-  planMap.setView(p, 15);
+  planMap.jumpTo({ center: ll(p), zoom: 15 });
   drawPlan();
 }
 
@@ -389,7 +647,8 @@ async function buildRoute() {
     }
     plan.route = shapeRoute(best.route, best.pts, stopIndex);
     showSummary();
-    drawPlan();
+    await drawPlan();
+    loadPois(plan.route);
   } catch (e) {
     showPlanError(e.message);
   } finally {
@@ -405,6 +664,7 @@ function showSummary() {
   $("#sumStop").textContent = plan.chosen && plan.stop !== "none" ? `途中で「${plan.chosen.name}」に寄ります` : "寄り道なしで、ぐるっと一周します";
   const { sunset } = sunTimes(new Date(), plan.home[0], plan.home[1]);
   const night = isNightWalk(Date.now(), r.total / WALK_SPEED / 60, plan.home);
+  $("#sumPois").textContent = "ルート沿いの見どころを探しています…";
   $("#sumSun").textContent = night ? `日の入りは${fmtTime(sunset)}。いま出発すると、夜向けのお題も混ざります` : `日の入りは${fmtTime(sunset)}`;
   $("#routeSummary").hidden = false;
 }
@@ -464,7 +724,7 @@ async function loadShared() {
     plan.candidates = plan.chosen ? [plan.chosen] : [];
     $("#sharedBanner").hidden = false;
     $("#planForm").hidden = true; $("#btnMake").hidden = true;
-    planMap.setView(plan.home, 15);
+    planMap.jumpTo({ center: ll(plan.home), zoom: 15 });
     await buildRoute();
     return true;
   } catch { return false; }
@@ -530,13 +790,13 @@ function headingTick() {
   if (!walk) return;
   const mode = heading.mode === "compass" && heading.compass == null ? "route" : heading.mode;
   heading.target = mode === "north" ? 0 : mode === "compass" ? heading.compass : routeHeading();
+  // 現在地の矢印は、地図の向きに関係なく実際に向いている方向を指す
+  if (walkMe) walkMe.setRotation(heading.compass != null ? heading.compass : routeHeading());
   // 少しずつ近づけて、地図がガタガタ回らないようにする
   let diff = ((heading.target - heading.shown + 540) % 360) - 180;
   if (Math.abs(diff) < 0.3) return;
   heading.shown = (heading.shown + diff * 0.15 + 360) % 360;
-  $("#walkMap").style.transform = `translate(-50%, -50%) rotate(${-heading.shown}deg)`;
-  const me = document.querySelector(".me svg");
-  if (me) me.style.transform = `rotate(${heading.shown}deg)`;
+  if (walkMap) walkMap.setBearing(heading.shown);
   $("#btnHeading").style.transform = `rotate(${-heading.shown}deg)`;
 }
 function cycleHeading() {
@@ -546,13 +806,11 @@ function cycleHeading() {
   toast(heading.mode === "north" ? "北が上の地図にしました" : heading.compass == null ? "進む方向が上の地図にしました" : "向いている方向が上の地図にしました");
 }
 
-// 回転しても四隅が欠けないよう、表示枠の対角線の長さの正方形にする
+// 現在地を画面の下寄りに置いて、進む先が広く見えるようにする
 function sizeWalkMap() {
-  const wrap = $("#mapWrap"), w = wrap.clientWidth, h = wrap.clientHeight;
-  const d = Math.ceil(Math.sqrt(w * w + h * h));
-  const el = $("#walkMap");
-  el.style.width = d + "px"; el.style.height = d + "px";
-  if (walkMap) walkMap.invalidateSize();
+  if (!walkMap) return;
+  walkMap.resize();
+  walkMap.setPadding({ top: Math.round($("#mapWrap").clientHeight * 0.3), bottom: 0, left: 0, right: 0 });
 }
 window.addEventListener("resize", () => { if (walk) sizeWalkMap(); });
 
@@ -591,7 +849,7 @@ async function keepAwake() {
 }
 
 // ---------- 散歩中 ----------
-let walkMap, walkLayer, walkTrackLine, walkMe;
+let walkMap, walkMe, walkMarkers = [];
 
 function startWalk(sim) {
   requestCompass();
@@ -604,7 +862,7 @@ function startWalk(sim) {
     stopMission: plan.chosen && plan.stop !== "none" ? STOP_TYPES[plan.chosen.type || plan.stop].mission : null,
     progress: 0, track: [plan.home], pos: plan.home, lastFixAt: Date.now(),
     events: missionPlan(plan.seed, route.total, plan.interval, route.stopAlong, night), eventIdx: 0,
-    turnAlert: plan.turnAlert, alerted: [],
+    turnAlert: plan.turnAlert, alerted: [], noticed: [],
     inbox: [], results: [], photos: 0,
     stopArrived: false, resting: false, restMs: 0, restStart: 0, off: 0, simAlong: 0, done: false,
   };
@@ -619,14 +877,18 @@ function resumeWalkSession() {
   $("#nightBadge").hidden = !walk.night;
   $("#btnHeading").textContent = heading.mode === "north" ? "N" : "↑";
   if (!walkMap) {
-    walkMap = makeMap($("#walkMap"), { dragging: false, touchZoom: "center", scrollWheelZoom: "center", doubleClickZoom: "center", tap: false });
-    walkLayer = L.layerGroup().addTo(walkMap);
-    walkTrackLine = L.polyline([], { color: TRACK_COLOR, weight: 5 }).addTo(walkMap);
-    walkMe = L.marker(walk.pos, { icon: L.divIcon({ className: "me", iconSize: [34, 34], html: `<svg viewBox="0 0 34 34"><path d="M17 2 24 13H10Z" fill="${TRACK_COLOR}"/><circle cx="17" cy="18" r="8" fill="${TRACK_COLOR}" stroke="#fff" stroke-width="3"/></svg>` }), interactive: false, zIndexOffset: 1000 }).addTo(walkMap);
+    walkMap = makeMap($("#walkMap"), { dragPan: false, zoom: 17, center: ll(walk.pos) });
+    walkMap.scrollZoom.enable({ around: "center" });
+    walkMap.touchZoomRotate.enable({ around: "center" }); walkMap.touchZoomRotate.disableRotation();
+    const me = mkEl("me");
+    me.innerHTML = `<svg viewBox="0 0 34 34"><path d="M17 2 24 13H10Z" fill="${TRACK_COLOR}"/><circle cx="17" cy="18" r="8" fill="${TRACK_COLOR}" stroke="#fff" stroke-width="3"/></svg>`;
+    walkMe = new maplibregl.Marker({ element: me, rotationAlignment: "map" }).setLngLat(ll(walk.pos)).addTo(walkMap);
   }
-  drawWalkRoute();
-  walkTrackLine.setLatLngs(walk.track); walkMe.setLatLng(walk.pos);
-  requestAnimationFrame(() => { sizeWalkMap(); walkMap.setView(walk.pos, 17, { animate: false }); });
+  walkMe.setLngLat(ll(walk.pos));
+  walkMap.ready.then(() => {
+    drawWalkRoute(); setTrack(walkMap, walk.track);
+    sizeWalkMap(); walkMap.jumpTo({ center: ll(walk.pos), zoom: 17 });
+  });
   $("#restCard").hidden = !walk.resting;
   if (walk.resting) $("#restText").textContent = `${walk.stopName}で休憩中です。`;
   renderCard(); renderThumbs();
@@ -643,9 +905,10 @@ function resumeWalkSession() {
   updateWalkUI();
 }
 function drawWalkRoute() {
-  walkLayer.clearLayers();
-  L.polyline(walk.route.coords, { color: ROUTE_COLOR, weight: 7, opacity: 0.7 }).addTo(walkLayer);
-  addDirArrows(walkLayer, walk.route, 150);
+  if (!walkMap || !walkMap.isReady) return;
+  setRoute(walkMap, walk.route.coords);
+  walkMarkers.forEach((mk) => mk.remove()); walkMarkers = [];
+  drawPois(walkMap, walk.route.pois, walkMarkers);
 }
 
 function startWatch() {
@@ -699,9 +962,17 @@ function onPosition(p) {
   walk.lastFixAt = Date.now();
   walk.pos = p;
   const last = walk.track[walk.track.length - 1];
-  if (dist(last, p) > 5) { walk.track.push(p); walkTrackLine.addLatLng(p); }
-  walkMe.setLatLng(p);
-  walkMap.setView(p, walkMap.getZoom(), { animate: false });
+  if (dist(last, p) > 5) { walk.track.push(p); setTrack(walkMap, walk.track); }
+  walkMe.setLngLat(ll(p));
+  walkMap.jumpTo({ center: ll(p) });
+
+  // ちらっと見たい場所の近くを通ったら知らせる
+  (walk.route.pois || []).forEach((poi) => {
+    if (!walk.noticed.includes(poi.id) && dist(p, poi.pos) < 45) {
+      walk.noticed.push(poi.id);
+      toast(`近くに「${poi.name}」（${poi.label}）があります`);
+    }
+  });
 
   // 休憩中は、お店から離れたら自動で再開
   if (walk.resting) {
@@ -771,6 +1042,8 @@ function renderCard() {
   $("#missionKind").textContent = m.kind === "talk" ? `${k.label}・${TALK_CATS[m.cat]}` : k.label;
   $("#missionKind").className = "kind " + m.kind;
   $("#missionText").textContent = m.text;
+  $("#missionTip").textContent = m.tip ? `観察のコツ：${m.tip}` : "";
+  $("#missionTip").hidden = !m.tip;
   $("#missionMore").textContent = walk.inbox.length > 1 ? `ほかに${walk.inbox.length - 1}つ届いています` : "";
   $("#btnShoot").hidden = !k.shoot;
   $("#btnDone").textContent = k.done;
@@ -995,7 +1268,7 @@ async function renderAlbum() {
   }
 }
 
-let detailMap, detailLayer;
+let detailMap, detailMarkers = [];
 async function openDetail(id) {
   showView("detail");
   releaseUrls();
@@ -1011,15 +1284,19 @@ async function openDetail(id) {
   $("#newBadges").innerHTML = "";
   fresh.forEach((b) => { const el = stamp(b, true); el.querySelector(".bdesc").textContent = b.desc; $("#newBadges").appendChild(el); });
 
-  if (!detailMap) { detailMap = makeMap($("#detailMap")); detailLayer = L.layerGroup().addTo(detailMap); }
-  detailLayer.clearLayers();
-  setTimeout(() => {
-    detailMap.invalidateSize();
-    const routeLine = L.polyline(w.route, { color: ROUTE_COLOR, weight: 4, opacity: 0.4 }).addTo(detailLayer);
-    if (w.track.length > 1) L.polyline(w.track, { color: TRACK_COLOR, weight: 4 }).addTo(detailLayer);
-    ps.forEach((p) => { if (p.pos) L.circleMarker(p.pos, dot(TRACK_COLOR, 7)).addTo(detailLayer).on("click", () => openViewer(p)); });
-    detailMap.fitBounds(routeLine.getBounds(), { padding: [16, 16] });
-  }, 50);
+  if (!detailMap) detailMap = makeMap($("#detailMap"));
+  detailMarkers.forEach((mk) => mk.remove()); detailMarkers = [];
+  detailMap.ready.then(() => {
+    detailMap.resize();
+    setRoute(detailMap, w.route);
+    setTrack(detailMap, w.track);
+    ps.forEach((p) => {
+      if (!p.pos) return;
+      const e = mkEl("photodot"); e.addEventListener("click", () => openViewer(p));
+      detailMarkers.push(htmlMarker(detailMap, p.pos, e));
+    });
+    detailMap.fitBounds(boundsOf(w.route), { padding: 28, animate: false });
+  });
 
   const grid = $("#detailPhotos");
   grid.innerHTML = "";
@@ -1092,7 +1369,7 @@ function showView(name) {
   ["plan", "walk", "album", "detail"].forEach((v) => ($("#view-" + v).hidden = v !== name));
   $("#tabs").hidden = name === "walk";
   $$("#tabs button").forEach((b) => b.classList.toggle("on", b.dataset.tab === (name === "detail" ? "album" : name)));
-  if (name === "plan" && planMap) setTimeout(() => planMap.invalidateSize(), 50);
+  if (name === "plan" && planMap) setTimeout(() => planMap.resize(), 50);
   if (name === "album") renderAlbum();
   window.scrollTo(0, 0);
 }
@@ -1164,7 +1441,7 @@ function init() {
   // 散歩の途中でページが読み込み直されたら、続きから再開する
   const active = store.get("active", null);
   if (active && active.results && Date.now() - active.startedAt < 6 * 3600e3) {
-    walk = { alerted: [], ...active, lastFixAt: 0 };
+    walk = { alerted: [], noticed: [], ...active, lastFixAt: 0 };
     resumeWalkSession();
     toast("散歩の続きから再開しました");
     return;

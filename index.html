@@ -9,8 +9,8 @@
 <title>ふたり散歩</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Zen+Maru+Gothic:wght@700&display=swap">
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
-<link rel="stylesheet" href="style.css?v=9">
+<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
+<link rel="stylesheet" href="style.css?v=11">
 </head>
 <body>
 
@@ -70,6 +70,7 @@
     <ul class="facts">
       <li id="sumLoop"></li>
       <li id="sumStop"></li>
+      <li id="sumPois"></li>
       <li id="sumSun"></li>
     </ul>
     <button id="btnStart" class="primary">出発する</button>
@@ -119,6 +120,7 @@
     <div id="missionCard" class="card" hidden>
       <div class="cardhead"><span class="kind" id="missionKind"></span><span class="muted small" id="missionMore"></span></div>
       <p id="missionText"></p>
+      <p id="missionTip" class="tip" hidden></p>
       <div class="actions">
         <label class="secondary" for="photoInput" id="btnShoot">撮る</label>
         <button class="primary" id="btnDone">見つけた</button>
@@ -203,9 +205,9 @@
 <input type="file" id="photoInput" accept="image/*" capture="environment" class="visually-hidden">
 <div id="toast" class="toast" hidden></div>
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
-<script src="missions.js?v=9"></script>
-<script src="badges.js?v=9"></script>
-<script src="app.js?v=9"></script>
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<script src="missions.js?v=11"></script>
+<script src="badges.js?v=11"></script>
+<script src="app.js?v=11"></script>
 </body>
 </html>
