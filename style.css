@@ -430,3 +430,10 @@ input[type="range"] { accent-color: var(--fg); }
 .poipop a { color: #1f4fd8; }
 /* 地図の向きのボタンは回転するので、方位磁針として丸くする */
 #btnHeading { border-radius: 50% !important; }
+
+/* 散歩日記・手紙・相手の現在地（夫婦用ページだけで表示） */
+.diary, .letterbox { padding: 12px 0; gap: 8px; }
+.diarytext { margin: 0; white-space: pre-wrap; line-height: 1.85; font-size: 15px; }
+.letterbox textarea { resize: none; }
+.partner { min-width: 30px; height: 30px; padding: 0 4px; display: grid; place-items: center; background: #111; color: #fff; font-size: 11px; font-weight: 500; border: 2px solid #fff; }
+.kind.letter { color: var(--accent); }

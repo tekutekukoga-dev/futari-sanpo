@@ -9,8 +9,9 @@ const TALK_CATS = { philo: "ちょっと哲学", past: "むかし話", us: "ふ�
 KINDS.theme = { label: "今日のテーマ", done: "はじめる", shoot: false };
 KINDS.split = { label: "別行動", done: "OK", shoot: false };
 KINDS.choose = { label: "分かれ道", done: "", shoot: false };
+KINDS.letter = { label: "手紙", done: "読んだ", shoot: false };
 // 記録に残さない、お知らせだけのカード
-const INFO_KINDS = ["theme", "split", "choose"];
+const INFO_KINDS = ["theme", "split", "choose", "letter"];
 
 // 今日のテーマ。観察のお題のうち、テーマに合うものを多めに出す
 const THEMES = {

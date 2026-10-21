@@ -10,6 +10,16 @@ Parameters:
   AllowedEmails:
     Type: String
     NoEcho: true
+  # プッシュ通知の鍵（公開鍵はアプリに渡す。秘密鍵はリポジトリに置かず deploy.sh が渡す）
+  VapidPublic:
+    Type: String
+  VapidPrivate:
+    Type: String
+    NoEcho: true
+  # AI散歩日記に使うモデル（日本国内で処理される推論プロファイル）
+  ModelId:
+    Type: String
+    Default: jp.anthropic.claude-haiku-4-5-20251001-v1:0
 
 Resources:
   # 写真の保管場所。公開はせず、アプリには期限付きのURLだけを渡す
@@ -30,6 +40,15 @@ Resources:
         ServerSideEncryptionConfiguration:
           - ServerSideEncryptionByDefault:
               SSEAlgorithm: AES256
+      # 上書きや削除をしても90日間は元に戻せるようにする
+      VersioningConfiguration:
+        Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+          - Id: keep-old-versions-90-days
+            Status: Enabled
+            NoncurrentVersionExpiration: { NoncurrentDays: 90 }
+            AbortIncompleteMultipartUpload: { DaysAfterInitiation: 1 }
       CorsConfiguration:
         CorsRules:
           - AllowedMethods: [GET, PUT]
@@ -151,8 +170,16 @@ Resources:
             Version: "2012-10-17"
             Statement:
               - Effect: Allow
-                Action: [dynamodb:GetItem, dynamodb:PutItem, dynamodb:UpdateItem, dynamodb:DeleteItem, dynamodb:Query]
+                Action: [dynamodb:GetItem, dynamodb:PutItem, dynamodb:UpdateItem, dynamodb:DeleteItem, dynamodb:Query, dynamodb:Scan]
                 Resource: !GetAtt Table.Arn
+              - Effect: Allow
+                Action: bedrock:InvokeModel
+                Resource:
+                  - arn:aws:bedrock:*::foundation-model/anthropic.*
+                  - !Sub arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/*
+              - Effect: Allow
+                Action: ses:SendEmail
+                Resource: !Sub arn:aws:ses:${AWS::Region}:${AWS::AccountId}:identity/*
               - Effect: Allow
                 Action: [s3:GetObject, s3:PutObject]
                 Resource: !Sub ${PhotosBucket.Arn}/pairs/*
@@ -164,15 +191,63 @@ Resources:
       Runtime: nodejs20.x
       Handler: index.handler
       Role: !GetAtt ApiRole.Arn
-      Timeout: 15
+      # AI日記は写真を読むので少し時間がかかる（API Gatewayの上限30秒の手前まで）
+      Timeout: 29
+      MemorySize: 512
+      Environment:
+        Variables:
+          TABLE: !Ref Table
+          BUCKET: !Ref PhotosBucket
+          SITE_URL: !Sub https://${SiteDistribution.DomainName}
+          VAPID_PUBLIC: !Ref VapidPublic
+          VAPID_PRIVATE: !Ref VapidPrivate
+          MODEL_ID: !Ref ModelId
+          MAIL_FROM: !Select [0, !Split [",", !Ref AllowedEmails]]
+      # 本当の処理は deploy.sh で入れ替える
+      Code:
+        ZipFile: "exports.handler = async () => ({ statusCode: 503, body: 'not deployed yet' });"
+
+  # 週末のふりかえりメール。毎週日曜 20:00（日本時間）
+  WeeklyFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: futari-sanpo-weekly
+      Runtime: nodejs20.x
+      Handler: index.weekly
+      Role: !GetAtt ApiRole.Arn
+      Timeout: 120
       MemorySize: 256
       Environment:
         Variables:
           TABLE: !Ref Table
           BUCKET: !Ref PhotosBucket
-      # 本当の処理は deploy.sh で入れ替える
+          SITE_URL: !Sub https://${SiteDistribution.DomainName}
+          MAIL_FROM: !Select [0, !Split [",", !Ref AllowedEmails]]
       Code:
-        ZipFile: "exports.handler = async () => ({ statusCode: 503, body: 'not deployed yet' });"
+        ZipFile: "exports.weekly = async () => ({ ok: false });"
+  WeeklySchedule:
+    Type: AWS::Events::Rule
+    Properties:
+      ScheduleExpression: cron(0 11 ? * SUN *)
+      Targets:
+        - Id: weekly
+          Arn: !GetAtt WeeklyFunction.Arn
+  WeeklyPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref WeeklyFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt WeeklySchedule.Arn
+  # メールの送り先と送り元（確認メールのリンクを押すと使えるようになる）
+  MailIdentity1:
+    Type: AWS::SES::EmailIdentity
+    Properties:
+      EmailIdentity: !Select [0, !Split [",", !Ref AllowedEmails]]
+  MailIdentity2:
+    Type: AWS::SES::EmailIdentity
+    Properties:
+      EmailIdentity: !Select [1, !Split [",", !Ref AllowedEmails]]
 
   ApiLogs:
     Type: AWS::Logs::LogGroup

@@ -438,6 +438,8 @@ async function loadPois(route) {
   show(quick);
   const more = await detailed;
   if (more && more.length) show(tidyPois(geo, [...more, ...quick]));
+  // 夫婦用ページ：見どころがそろったら、AIのお題を先に頼んでおく
+  if (window.Cloud && plan.route === route) Cloud.missionsFor(route);
 }
 function drawPois(m, pois, bucket) {
   (pois || []).forEach((p) => {
@@ -1173,6 +1175,14 @@ function startWalk(sim) {
     inbox: [], results: [], photos: 0,
     stopArrived: false, resting: false, restMs: 0, restStart: 0, off: 0, simAlong: 0, done: false,
   };
+  // 夫婦用ページ：AIのお題が届いたら、まだ届いていないお題と入れ替える
+  if (window.Cloud) Cloud.missionsFor(route).then((list) => { if (walk && list.length && Cloud.applyMissions(walk, list)) saveActive(); });
+  // 夫婦用ページ：相手からの手紙が届いていたら、出発のときに渡す
+  if (window.Cloud && !sim) Cloud.openLetters().then((letters) => {
+    if (!walk || !letters.length) return;
+    letters.forEach((l, i) => walk.inbox.unshift({ kind: "letter", id: "letter" + i, label: `${l.from}からの手紙`, text: l.text, arrivedAt: Date.now() }));
+    buzz([100, 80, 100]); renderCard(); saveActive();
+  });
   if (walk.theme) walk.inbox.push({ kind: "theme", id: "theme", text: `今日のテーマは「${THEMES[walk.theme].label}」。${THEMES[walk.theme].desc}`, arrivedAt: Date.now() });
   buzz(100);
   resumeWalkSession();
@@ -1376,6 +1386,7 @@ function chooseBranch(which) {
     { ...pick, id: "sp", label: "別行動のお題", arrivedAt: Date.now() },
   );
   drawWalkRoute(); renderCard(); saveActive();
+  if (window.Cloud && !walk.sim) Cloud.event({ type: "branch", color: b.color });
 }
 function arriveMeet() {
   walk.met = true;
@@ -1383,6 +1394,7 @@ function arriveMeet() {
   MISSIONS.meet.slice(0, meetIsStop ? 2 : 3).forEach((x, i) => walk.inbox.push({ ...x, id: "mt" + i, label: i < 2 ? "合流" : null, arrivedAt: Date.now() }));
   buzz([200, 100, 200, 100, 200]);
   drawWalkRoute(); renderCard(); saveActive();
+  if (window.Cloud && !walk.sim) { Cloud.event({ type: "met", place: sp.meetName }); Cloud.stopSharing(); }
 }
 
 function arriveStop() {
@@ -1463,6 +1475,8 @@ function updateWalkUI() {
   }
   $("#statRemain").textContent = `${fmtKm(Math.max(0, r.total - prog))}km`;
   const showMeet = walk.split && walk.branch && !walk.met;
+  // 夫婦用ページ：別行動のあいだは、お互いの現在地をやりとりする
+  if (window.Cloud && showMeet && !walk.sim) Cloud.shareWhileApart(walk);
   $("#meetBadge").hidden = !showMeet;
   if (showMeet) $("#meetBadge").textContent = `合流 ${fmtTime(walk.meetEta)}・${walk.split.meetName}`;
   const elapsed = (Date.now() - walk.startedAt) * (walk.sim ? SIM_SPEED : 1);
@@ -1533,7 +1547,7 @@ async function finishWalk(early) {
   buzz([200, 100, 400]);
   walk = null;
   openDetail(record.id);
-  if (window.Cloud) Cloud.sync(true);
+  if (window.Cloud) { Cloud.stopSharing(); Cloud.sync(true).then(() => !record.sim && record.distance > 300 && Cloud.diary(record.id, true)); }
 }
 
 // ---------- 写真 ----------
@@ -1739,6 +1753,7 @@ async function openDetail(id) {
     grid.appendChild(b);
   });
 
+  if (window.Cloud) { Cloud.renderDiary(group); Cloud.renderLetter(group); }
   // ふたりで歩いたときは、二人の気づきをまとめて、誰の気づきかを添える
   const done = group.flatMap((x) => (x.results || []).filter((r) => r.outcome === "done").map((r) => ({ ...r, owner: x.owner })));
   $("#detailLog").hidden = !done.length;

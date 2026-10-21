@@ -101,6 +101,9 @@ window.Cloud = (() => {
           p.remoteId = r.id; await idb("photos", "readwrite", (st) => st.put(p));
         }
         const remote = await api("/walks");
+        const diaries = ls.get("diaries", {});
+        for (const d of remote.diaries || []) { if (diaries[d.key] !== d.text) { diaries[d.key] = d.text; changed = true; } }
+        ls.set("diaries", diaries);
         const have = new Set(walks.map((w) => w.id));
         for (const w of remote.walks) {
           if (have.has(w.id)) continue;
@@ -171,6 +174,7 @@ window.Cloud = (() => {
         <p><b>${esc(me.name)}</b>と<b>${esc(other?.name || "あいて")}</b>のアルバム</p>
         <p class="small muted">${syncing ? "同期しています…" : syncError ? "" : lastSync ? `最後の同期：${new Date(lastSync).toLocaleString("ja-JP", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })}` : "まだ同期していません"}</p>
         ${syncError ? `<p class="error small">${esc(syncError)}</p>` : ""}
+        ${pushRow()}
         <div class="actions"><button class="secondary" data-act="sync">今すぐ同期</button><button class="link" data-act="logout">ログアウト</button></div>`;
     }
   }
@@ -191,6 +195,7 @@ window.Cloud = (() => {
         try { if (navigator.share) await navigator.share({ text }); else { await navigator.clipboard.writeText(text); toast("招待コードをコピーしました"); } } catch {}
       }
       if (name === "sync") { const ch = await sync(true); if (ch) renderAlbum(); }
+      if (name === "push") await enablePush();
       ls.set("cloudMe", me);
       if (["create", "join", "refresh"].includes(name) && ready()) sync(true).then((ch) => ch && renderAlbum());
     } catch (e) {
@@ -273,11 +278,146 @@ window.Cloud = (() => {
     try { await idp("ResendConfirmationCode", { ClientId: CLOUD.clientId, Username: pendingEmail }); toast("確認コードを送り直しました"); } catch (err) { toast(err.message, true); }
   }, true);
 
+  // ---------- 通知（ホーム画面に追加したときだけ使える） ----------
+  const standalone = () => navigator.standalone || matchMedia("(display-mode: standalone)").matches;
+  const pushSupported = () => "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
+  function pushRow() {
+    if (ls.get("pushOn", false) && pushSupported() && Notification.permission === "granted") return `<p class="small muted">通知：オン（写真の追加・合流・別行動の知らせが届きます）</p>`;
+    if (!pushSupported() || !standalone()) return `<p class="small muted">通知を受け取るには、共有ボタンの「ホーム画面に追加」から開いてください。</p>`;
+    if (Notification.permission === "denied") return `<p class="small muted">通知がオフになっています。iPhoneの「設定 → 通知 → ふたり散歩」でオンにできます。</p>`;
+    return `<div class="actions"><button class="secondary" data-act="push">通知をオンにする</button></div>`;
+  }
+  const keyBytes = (b64) => { const s = atob(b64.replace(/-/g, "+").replace(/_/g, "/")); return Uint8Array.from(s, (c) => c.charCodeAt(0)); };
+  async function enablePush() {
+    const reg = await navigator.serviceWorker.register("sw.js");
+    await navigator.serviceWorker.ready;
+    if ((await Notification.requestPermission()) !== "granted") throw new Error("通知が許可されませんでした");
+    const subn = (await reg.pushManager.getSubscription()) || await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: keyBytes(CLOUD.vapidPublic) });
+    await api("/push/subscribe", { method: "POST", body: subn.toJSON() });
+    ls.set("pushOn", true);
+    toast("通知をオンにしました");
+  }
+
+  // ---------- 手紙・合流の知らせ ----------
+  async function openLetters() {
+    if (!ready() || me.pair.members.length < 2) return [];
+    try { return (await api("/letters")).letters || []; } catch { return []; }
+  }
+  function event(body) { if (ready()) api("/events", { method: "POST", body }).catch(() => {}); }
+  function renderLetter(group) {
+    const el = document.getElementById("detailLetter");
+    const mine = group.find((w) => !w.fromCloud || w.owner === myId());
+    // 散歩から帰って12時間のあいだだけ、相手への手紙を書ける
+    if (!el || !ready() || me.pair.members.length < 2 || !mine || mine.sim || Date.now() - mine.endedAt > 12 * 3600e3) { if (el) el.hidden = true; return; }
+    const other = me.pair.members.find((m) => !m.me)?.name || "あいて";
+    el.hidden = false;
+    el.innerHTML = `<span class="itemlabel">${esc(other)}への手紙</span>
+      <p class="small muted">次の散歩に出発したときに、${esc(other)}のスマホに届きます。</p>
+      <textarea id="letterText" class="field" rows="3" maxlength="400" placeholder="今日の散歩のこと、ひとこと"></textarea>
+      <div class="actions"><button class="primary" id="btnLetter">手紙を送る</button></div>`;
+    el.querySelector("#btnLetter").onclick = async () => {
+      const text = el.querySelector("#letterText").value.trim();
+      if (!text) return toast("手紙が空です", true);
+      try { await api("/letters", { method: "POST", body: { text } }); el.innerHTML = `<span class="itemlabel">${esc(other)}への手紙</span><p>送りました。次の散歩で届きます。</p>`; }
+      catch (e) { toast(e.message, true); }
+    };
+  }
+
+  // ---------- AI散歩日記 ----------
+  const diaryKey = (group) => String(group[0].seed ?? group[0].id);
+  async function diary(walkId, quiet) {
+    if (!ready()) return null;
+    const group = groupWalks(await allWalks()).find((g) => g.some((w) => w.id === walkId));
+    if (!group) return null;
+    try {
+      const r = await api("/diary", { method: "POST", body: { key: diaryKey(group), walkIds: group.map((w) => w.id) } });
+      const all = ls.get("diaries", {}); all[r.key] = r.text; ls.set("diaries", all);
+      if (!document.getElementById("view-detail").hidden) renderDiary(group);
+      return r.text;
+    } catch (e) { if (!quiet) toast(e.message, true); return null; }
+  }
+  function renderDiary(group) {
+    const el = document.getElementById("detailDiary");
+    if (!el) return;
+    const text = ls.get("diaries", {})[diaryKey(group)];
+    if (group[0].sim || (!text && !ready())) { el.hidden = true; return; }
+    el.hidden = false;
+    if (text) {
+      el.innerHTML = `<span class="itemlabel">散歩日記</span><p class="diarytext"></p><button class="link small" id="btnDiary">書き直してもらう</button>`;
+      el.querySelector(".diarytext").textContent = text;
+    } else {
+      el.innerHTML = `<span class="itemlabel">散歩日記</span><p class="small muted">ルート・寄り道・メモ・写真から、AIが短い日記を書きます。</p><div class="actions"><button class="secondary" id="btnDiary">AIに日記を書いてもらう</button></div>`;
+    }
+    el.querySelector("#btnDiary").onclick = async (e) => {
+      e.target.disabled = true; e.target.textContent = "書いています…（10秒ほど）";
+      await sync(true);
+      await diary(group[0].id);
+      renderDiary(group);
+    };
+  }
+
+  // ---------- AIのお題 ----------
+  // ルートができたら先に頼んでおく。二人とも同じルート番号で頼むので、同じお題が返ってくる
+  const aiCache = {};
+  const SEASON = { spring: "春", summer: "夏", autumn: "秋", winter: "冬" };
+  function missionsFor(route) {
+    if (!ready() || !route) return Promise.resolve([]);
+    const key = String(plan.seed);
+    if (!aiCache[key]) {
+      const tk = themeKey(plan.seed);
+      aiCache[key] = api("/missions", { method: "POST", body: {
+        key, season: SEASON[seasonKey(new Date().getMonth() + 1)],
+        weather: plan.weather ? `${plan.weather.label}・${plan.weather.temp}℃` : "",
+        night: isNightWalk(Date.now(), route.total / WALK_SPEED / 60, plan.home),
+        theme: tk ? THEMES[tk].label : "", stop: plan.chosen && plan.stop !== "none" ? plan.chosen.name : "",
+        meet: route.split ? route.split.meetName : "",
+        places: (route.pois || []).slice(0, 10).map((p) => ({ name: p.name, label: p.label })),
+      } }).then((r) => r.missions || []).catch(() => { delete aiCache[key]; return []; });
+    }
+    return aiCache[key];
+  }
+  // 散歩のお題の予定のうち、まだ届いていないものをAIのお題に置き換える（間をあけて散らす）
+  function applyMissions(w, list) {
+    const rest = w.events.slice(w.eventIdx).filter((e) => e.id !== "final" && !e.ai);
+    let used = 0;
+    ["look", "talk"].forEach((kind) => {
+      const slots = rest.filter((e) => e.kind === kind);
+      list.filter((m) => m.kind === kind).forEach((m, i) => {
+        const e = slots[Math.min(slots.length - 1, 1 + i * 2)];
+        if (!e || e.ai) return;
+        Object.assign(e, { text: m.text, tip: m.tip || undefined, cat: kind === "talk" ? "us" : undefined, label: "AIのお題", ai: true });
+        used++;
+      });
+    });
+    return used;
+  }
+
+  // ---------- 別行動中の現在地 ----------
+  let partnerMarker = null, lastShare = 0;
+  async function shareWhileApart(w) {
+    if (!ready() || Date.now() - lastShare < 20000 || document.visibilityState !== "visible") return;
+    lastShare = Date.now();
+    const sp = w.split, meetAlong = w.meetAlong ?? (w.branch === "B" ? sp.meetAlongB : sp.meetAlongA);
+    try {
+      await api("/location", { method: "POST", body: { lat: w.pos[0], lon: w.pos[1], eta: w.meetEta, left: Math.max(0, Math.round(meetAlong - w.progress)) } });
+      const { location } = await api("/location");
+      if (!location || !walkMap) return;
+      const el = partnerMarker ? partnerMarker.getElement() : mkEl("partner");
+      el.textContent = location.name.slice(0, 2);
+      if (!partnerMarker) partnerMarker = htmlMarker(walkMap, [location.lat, location.lon], el);
+      else partnerMarker.setLngLat(ll([location.lat, location.lon]));
+      const chip = document.getElementById("meetBadge");
+      if (chip && location.left != null) chip.textContent = `合流 ${fmtTime(w.meetEta)}・${location.name}はあと${fmtDist(location.left)}`;
+    } catch {}
+  }
+  function stopSharing() { if (partnerMarker) { partnerMarker.remove(); partnerMarker = null; } }
+
   function init() {
     // ページのタイトルに「ふたり用」と出して、一般公開版と見分けられるようにする
     const logo = document.querySelector(".logo");
     if (logo && !logo.querySelector(".edition")) logo.insertAdjacentHTML("beforeend", '<span class="edition">ふたり用</span>');
     if (ready()) sync().then((ch) => ch && !document.getElementById("view-album").hidden && renderAlbum());
+    if (ls.get("pushOn", false) && "serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
   }
-  return { init, sync, renderBox, ready, myId, nameOf };
+  return { init, sync, renderBox, ready, myId, nameOf, openLetters, event, renderLetter, diary, renderDiary, shareWhileApart, stopSharing, missionsFor, applyMissions };
 })();

@@ -7,26 +7,37 @@
 //   INVITE#{code} / INVITE           招待コード → アルバム（48時間で自動削除）
 //   PAIR#{pair} / WALK#{id}#{walk}   散歩の記録
 //   PAIR#{pair} / PHOTO#{walk}#{id}#{at}  写真の情報（本体はS3）
+//   PAIR#{pair} / DIARY#{key}        AI散歩日記（key は二人の散歩で共通のルート番号）
+//   PAIR#{pair} / LETTER#{to}#{at}   相手への手紙（相手の次の散歩で開く）
+//   PAIR#{pair} / AIM#{key}          AIのお題（二人で同じものを使う。2日で自動削除）
+//   USER#{id}   / PUSH#{hash}        通知の送り先（ブラウザごと）
+//   USER#{id}   / LOC                別行動中の現在地（2時間で自動削除）
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
-import { DynamoDBDocumentClient, GetCommand, PutCommand, QueryCommand, UpdateCommand, TransactWriteCommand } from "@aws-sdk/lib-dynamodb";
+import { DynamoDBDocumentClient, GetCommand, PutCommand, QueryCommand, UpdateCommand, DeleteCommand, ScanCommand, TransactWriteCommand } from "@aws-sdk/lib-dynamodb";
+import { BedrockRuntimeClient, ConverseCommand } from "@aws-sdk/client-bedrock-runtime";
+import { S3Client, GetObjectCommand } from "@aws-sdk/client-s3";
+import { SESv2Client, SendEmailCommand } from "@aws-sdk/client-sesv2";
 import crypto from "node:crypto";
 
 const TABLE = process.env.TABLE, BUCKET = process.env.BUCKET, REGION = process.env.AWS_REGION;
 const ddb = DynamoDBDocumentClient.from(new DynamoDBClient({}), { marshallOptions: { removeUndefinedValues: true } });
 const INVITE_HOURS = 48;
+const bedrock = new BedrockRuntimeClient({}), s3 = new S3Client({}), ses = new SESv2Client({});
+const SITE = process.env.SITE_URL;
 
 const json = (statusCode, body) => ({ statusCode, headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
 const fail = (status, message) => Object.assign(new Error(message), { status, expose: true });
 
 export const handler = async (event) => {
-  const sub = event.requestContext?.authorizer?.jwt?.claims?.sub;
+  const claims = event.requestContext?.authorizer?.jwt?.claims || {};
+  const sub = claims.sub;
   if (!sub) return json(401, { error: "ログインしてください" });
   const method = event.requestContext.http.method, path = event.rawPath;
   let body = {};
   try { body = event.body ? JSON.parse(event.isBase64Encoded ? Buffer.from(event.body, "base64").toString() : event.body) : {}; }
   catch { return json(400, { error: "送られてきたデータが読めません" }); }
   try {
-    if (method === "GET" && path === "/me") return json(200, await me(sub));
+    if (method === "GET" && path === "/me") { await rememberEmail(sub, claims.email); return json(200, await me(sub)); }
     if (method === "POST" && path === "/profile") return json(200, await setProfile(sub, body));
     if (method === "POST" && path === "/pair") return json(200, await createPair(sub));
     if (method === "POST" && path === "/pair/invite") return json(200, await newInvite(sub));
@@ -34,6 +45,14 @@ export const handler = async (event) => {
     if (method === "GET" && path === "/walks") return json(200, await listWalks(sub));
     if (method === "PUT" && path.startsWith("/walks/")) return json(200, await saveWalk(sub, decodeURIComponent(path.slice(7)), body));
     if (method === "POST" && path === "/photos") return json(200, await newPhoto(sub, body));
+    if (method === "POST" && path === "/push/subscribe") return json(200, await subscribePush(sub, body));
+    if (method === "POST" && path === "/events") return json(200, await walkEvent(sub, body));
+    if (method === "POST" && path === "/letters") return json(200, await writeLetter(sub, body));
+    if (method === "GET" && path === "/letters") return json(200, await openLetters(sub));
+    if (method === "POST" && path === "/location") return json(200, await saveLocation(sub, body));
+    if (method === "GET" && path === "/location") return json(200, await partnerLocation(sub));
+    if (method === "POST" && path === "/diary") return json(200, await writeDiary(sub, body));
+    if (method === "POST" && path === "/missions") return json(200, await aiMissions(sub, body));
     return json(404, { error: "not found" });
   } catch (e) {
     if (!e.expose) console.error(e);
@@ -125,11 +144,12 @@ async function listWalks(sub) {
     key = r.LastEvaluatedKey;
   } while (key);
   const walks = items.filter((i) => i.sk.startsWith("WALK#")).map((i) => ({ ...i.data, owner: i.owner }));
+  const diaries = items.filter((i) => i.sk.startsWith("DIARY#")).map((i) => ({ key: i.sk.slice(6), text: i.text, at: i.createdAt }));
   // 写真は1時間だけ見られるURLを付けて返す
   const photos = items.filter((i) => i.sk.startsWith("PHOTO#")).map((i) => ({
     id: i.sk.slice(6), walkId: i.walkId, owner: i.owner, mission: i.mission, pos: i.pos, at: i.at, url: presign("GET", i.key, 3600),
   }));
-  return { walks, photos };
+  return { walks, photos, diaries };
 }
 async function saveWalk(sub, id, data) {
   const pairId = await pairOf(sub);
@@ -149,6 +169,7 @@ async function newPhoto(sub, b) {
     mission: b.mission ? String(b.mission).slice(0, 300) : null,
     pos: Array.isArray(b.pos) ? b.pos.slice(0, 2).map(Number) : null,
   } }));
+  notifyPartner(sub, pairId, "photo", (name) => ({ title: "ふたり散歩", body: `${name}が写真を追加しました${b.mission ? `：「${String(b.mission).slice(0, 40)}」` : ""}` })).catch(() => {});
   return { id, uploadUrl: presign("PUT", key, 900) };
 }
 
@@ -173,4 +194,275 @@ function presign(method, key, expires) {
   const hmac = (k, d) => crypto.createHmac("sha256", k).update(d).digest();
   const kSign = hmac(hmac(hmac(hmac("AWS4" + process.env.AWS_SECRET_ACCESS_KEY, date), REGION), "s3"), "aws4_request");
   return `https://${host}${path}?${qs}&X-Amz-Signature=${crypto.createHmac("sha256", kSign).update(toSign).digest("hex")}`;
+}
+
+
+// ---------- 名前・相手 ----------
+async function rememberEmail(sub, email) {
+  if (!email) return;
+  const p = await profile(sub);
+  if (p?.email === email) return;
+  await ddb.send(new UpdateCommand({ TableName: TABLE, Key: { pk: `USER#${sub}`, sk: "PROFILE" }, UpdateExpression: "SET email = :e", ExpressionAttributeValues: { ":e": email } }));
+}
+async function partnerOf(sub, pairId) {
+  const meta = await getItem(`PAIR#${pairId}`, "META");
+  return (meta?.members || []).find((m) => m !== sub) || null;
+}
+
+// ---------- プッシュ通知（Web Push：VAPID ＋ aes128gcm） ----------
+const PUSH_HOSTS = /(^|\.)(push\.apple\.com|fcm\.googleapis\.com|push\.services\.mozilla\.com|notify\.windows\.com)$/;
+const b64u = (buf) => Buffer.from(buf).toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+const fromB64u = (s) => Buffer.from(String(s).replace(/-/g, "+").replace(/_/g, "/"), "base64");
+const hkdf = (salt, ikm, info, len) => Buffer.from(crypto.hkdfSync("sha256", ikm, salt, info, len));
+let vapidKey;
+
+async function subscribePush(sub, b) {
+  let url;
+  try { url = new URL(String(b.endpoint || "")); } catch { throw fail(400, "通知の登録情報が正しくありません"); }
+  if (url.protocol !== "https:" || !PUSH_HOSTS.test(url.hostname) || !b.keys?.p256dh || !b.keys?.auth) throw fail(400, "通知の登録情報が正しくありません");
+  const id = crypto.createHash("sha256").update(url.href).digest("hex").slice(0, 32);
+  await ddb.send(new PutCommand({ TableName: TABLE, Item: { pk: `USER#${sub}`, sk: `PUSH#${id}`, sub: { endpoint: url.href, keys: { p256dh: String(b.keys.p256dh), auth: String(b.keys.auth) } }, createdAt: Date.now() } }));
+  await pushTo(sub, { title: "ふたり散歩", body: "通知をオンにしました" });
+  return { ok: true };
+}
+async function pushTo(userId, payload) {
+  const r = await ddb.send(new QueryCommand({ TableName: TABLE, KeyConditionExpression: "pk = :p AND begins_with(sk, :s)", ExpressionAttributeValues: { ":p": `USER#${userId}`, ":s": "PUSH#" } }));
+  await Promise.all((r.Items || []).map(async (item) => {
+    try {
+      const status = await sendPush(item.sub, JSON.stringify(payload));
+      // 端末側で通知をやめた・アプリを消した場合は、送り先から外す
+      if (status === 404 || status === 410) await ddb.send(new DeleteCommand({ TableName: TABLE, Key: { pk: item.pk, sk: item.sk } }));
+    } catch (e) { console.error("push", e.message); }
+  }));
+}
+async function sendPush(target, text) {
+  vapidKey ??= crypto.createPrivateKey({ key: Buffer.from(process.env.VAPID_PRIVATE, "base64"), format: "der", type: "sec1" });
+  const uaPublic = fromB64u(target.keys.p256dh), auth = fromB64u(target.keys.auth);
+  const ecdh = crypto.createECDH("prime256v1");
+  ecdh.generateKeys();
+  const asPublic = ecdh.getPublicKey(), shared = ecdh.computeSecret(uaPublic);
+  const ikm = hkdf(auth, shared, Buffer.concat([Buffer.from("WebPush: info\0"), uaPublic, asPublic]), 32);
+  const salt = crypto.randomBytes(16);
+  const cek = hkdf(salt, ikm, Buffer.from("Content-Encoding: aes128gcm\0"), 16);
+  const nonce = hkdf(salt, ikm, Buffer.from("Content-Encoding: nonce\0"), 12);
+  const cipher = crypto.createCipheriv("aes-128-gcm", cek, nonce);
+  const sealed = Buffer.concat([cipher.update(Buffer.concat([Buffer.from(text), Buffer.from([2])])), cipher.final(), cipher.getAuthTag()]);
+  const head = Buffer.alloc(21);
+  salt.copy(head, 0); head.writeUInt32BE(4096, 16); head.writeUInt8(65, 20);
+  const jwt = `${b64u(JSON.stringify({ typ: "JWT", alg: "ES256" }))}.${b64u(JSON.stringify({ aud: new URL(target.endpoint).origin, exp: Math.floor(Date.now() / 1000) + 12 * 3600, sub: SITE }))}`;
+  const sig = crypto.sign("sha256", Buffer.from(jwt), { key: vapidKey, dsaEncoding: "ieee-p1363" });
+  const res = await fetch(target.endpoint, {
+    method: "POST",
+    headers: { "Content-Encoding": "aes128gcm", "Content-Type": "application/octet-stream", TTL: "86400", Urgency: "normal", Authorization: `vapid t=${jwt}.${b64u(sig)}, k=${process.env.VAPID_PUBLIC}` },
+    body: Buffer.concat([head, asPublic, sealed]),
+  });
+  return res.status;
+}
+// 相手に知らせる。kind ごとに間隔をあける（写真は10分に1回まで）
+async function notifyPartner(sub, pairId, kind, make) {
+  const partner = await partnerOf(sub, pairId);
+  if (!partner) return;
+  if (kind === "photo") {
+    try {
+      await ddb.send(new UpdateCommand({ TableName: TABLE, Key: { pk: `USER#${sub}`, sk: "PROFILE" }, UpdateExpression: "SET lastPhotoPush = :n", ConditionExpression: "attribute_not_exists(lastPhotoPush) OR lastPhotoPush < :t", ExpressionAttributeValues: { ":n": Date.now(), ":t": Date.now() - 10 * 60000 } }));
+    } catch { return; }
+  }
+  const name = (await profile(sub))?.name || "あいて";
+  await pushTo(partner, make(name));
+}
+async function walkEvent(sub, b) {
+  const pairId = await pairOf(sub);
+  if (b.type === "met") await notifyPartner(sub, pairId, "met", (name) => ({ title: "合流", body: `${name}が合流場所${b.place ? `「${String(b.place).slice(0, 40)}」` : ""}に着きました` }));
+  if (b.type === "branch") await notifyPartner(sub, pairId, "branch", (name) => ({ title: "別行動", body: `${name}が${b.color === "黒" ? "黒" : "青"}の道を選びました` }));
+  return { ok: true };
+}
+
+// ---------- 相手への手紙 ----------
+async function writeLetter(sub, b) {
+  const pairId = await pairOf(sub);
+  const text = String(b.text || "").trim().slice(0, 400);
+  if (!text) throw fail(400, "手紙が空です");
+  const to = await partnerOf(sub, pairId);
+  if (!to) throw fail(409, "相手がまだアルバムに参加していません");
+  const at = Date.now();
+  await ddb.send(new PutCommand({ TableName: TABLE, Item: { pk: `PAIR#${pairId}`, sk: `LETTER#${to}#${at}`, from: sub, text, createdAt: at, opened: false } }));
+  return { ok: true };
+}
+// まだ開いていない自分宛ての手紙を返し、開いたことにする
+async function openLetters(sub) {
+  const pairId = await pairOf(sub);
+  const r = await ddb.send(new QueryCommand({ TableName: TABLE, KeyConditionExpression: "pk = :p AND begins_with(sk, :s)", ExpressionAttributeValues: { ":p": `PAIR#${pairId}`, ":s": `LETTER#${sub}#` } }));
+  const fresh = (r.Items || []).filter((i) => !i.opened);
+  await Promise.all(fresh.map((i) => ddb.send(new UpdateCommand({ TableName: TABLE, Key: { pk: i.pk, sk: i.sk }, UpdateExpression: "SET opened = :t, openedAt = :n", ExpressionAttributeValues: { ":t": true, ":n": Date.now() } }))));
+  const name = (await profile(fresh[0]?.from))?.name || "あいて";
+  return { letters: fresh.map((i) => ({ from: name, text: i.text, at: i.createdAt })) };
+}
+
+// ---------- 別行動中の現在地 ----------
+async function saveLocation(sub, b) {
+  await pairOf(sub);
+  const lat = Number(b.lat), lon = Number(b.lon);
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) throw fail(400, "位置が正しくありません");
+  await ddb.send(new PutCommand({ TableName: TABLE, Item: { pk: `USER#${sub}`, sk: "LOC", lat, lon, eta: Number(b.eta) || null, left: Number(b.left) || null, at: Date.now(), ttl: Math.floor(Date.now() / 1000) + 2 * 3600 } }));
+  return { ok: true };
+}
+async function partnerLocation(sub) {
+  const pairId = await pairOf(sub);
+  const partner = await partnerOf(sub, pairId);
+  const loc = partner && await getItem(`USER#${partner}`, "LOC");
+  if (!loc || Date.now() - loc.at > 15 * 60000) return { location: null };
+  return { location: { lat: loc.lat, lon: loc.lon, eta: loc.eta, left: loc.left, at: loc.at, name: (await profile(partner))?.name || "あいて" } };
+}
+
+// ---------- AI散歩日記（Amazon Bedrock） ----------
+const THEME_LABEL = { color: "色の日", sound: "音の日", retro: "昭和さがし", small: "小さいもの", shape: "形の日", life: "生きものの日" };
+async function writeDiary(sub, b) {
+  const pairId = await pairOf(sub);
+  const key = String(b.key || "").slice(0, 40), ids = (Array.isArray(b.walkIds) ? b.walkIds : []).map(String).slice(0, 4);
+  if (!key || !ids.length) throw fail(400, "どの散歩の日記か指定してください");
+  const r = await ddb.send(new QueryCommand({ TableName: TABLE, KeyConditionExpression: "pk = :p", ExpressionAttributeValues: { ":p": `PAIR#${pairId}` } }));
+  const items = r.Items || [];
+  const walks = items.filter((i) => i.sk.startsWith("WALK#") && ids.includes(i.data?.id));
+  if (!walks.length) throw fail(404, "散歩の記録がまだサーバーにありません。少し待ってからもう一度お試しください");
+  const names = {};
+  for (const w of walks) names[w.owner] = (await profile(w.owner))?.name || "あいて";
+  const first = walks[0].data;
+  const lines = [
+    `日付：${new Date(first.startedAt).toLocaleString("ja-JP", { timeZone: "Asia/Tokyo", month: "long", day: "numeric", weekday: "short", hour: "2-digit", minute: "2-digit" })}に出発`,
+    `歩いた距離：${(first.distance / 1000).toFixed(1)}km、${first.minutes}分`,
+    walks.length > 1 ? `歩いた人：${Object.values(names).join("と")}（ふたりで）` : `記録した人：${names[walks[0].owner]}`,
+    first.stopName ? `寄り道先：${first.stopName}` : "",
+    first.split ? `途中で二手に分かれて「${first.split.meetName}」で合流した` : "",
+    first.theme ? `今日のテーマ：${THEME_LABEL[first.theme] || first.theme}` : "",
+    first.weather ? `天気：${first.weather.label}・${first.weather.temp}℃` : "",
+    first.night ? "日が暮れてからの散歩" : "",
+    "見つけたこと・話したこと（お題とメモ）：",
+    ...walks.flatMap((w) => (w.data.results || []).filter((x) => x.outcome === "done").map((x) => `- ${names[w.owner]}：${x.kind === "talk" ? "話した" : "見つけた"}「${x.text}」${x.memo ? ` メモ「${x.memo}」` : ""}`)),
+  ].filter(Boolean);
+  // 写真は最大5枚まで、日記の手がかりとして見てもらう
+  const photos = items.filter((i) => i.sk.startsWith("PHOTO#") && ids.includes(i.walkId)).sort((a, b) => a.at - b.at).slice(0, 5);
+  const images = [];
+  for (const p of photos) {
+    try {
+      const o = await s3.send(new GetObjectCommand({ Bucket: BUCKET, Key: p.key }));
+      const bytes = await o.Body.transformToByteArray();
+      if (bytes.length > 100 && bytes.length < 3_500_000) images.push({ image: { format: "jpeg", source: { bytes } } });
+    } catch {}
+  }
+  const res = await converse({
+    system: [{ text: "あなたは、夫婦の散歩の記録から、短い散歩日記を書く書き手です。記録と写真にあることだけを使い、なかった出来事や会話を作らないでください。名前は記録にある呼び名を使います。語り口はやわらかい常体（〜した。〜だった。）で、200〜300字。見出しや箇条書きは使わず、ひとつながりの文章にしてください。最後に改行して「今日のひとこと：」で始まる短い一文を添えてください。" }],
+    messages: [{ role: "user", content: [...images, { text: `今日の散歩の記録です。写真は${images.length}枚あります。\n${lines.join("\n")}` }] }],
+    inferenceConfig: { maxTokens: 700, temperature: 0.7 },
+  });
+  const text = res.output?.message?.content?.map((c) => c.text || "").join("").trim();
+  if (!text) throw fail(502, "日記を書けませんでした。少し待ってからもう一度お試しください");
+  await ddb.send(new PutCommand({ TableName: TABLE, Item: { pk: `PAIR#${pairId}`, sk: `DIARY#${key}`, text, createdAt: Date.now(), by: sub } }));
+  return { key, text };
+}
+
+// ---------- 週末のふりかえりメール（毎週日曜20時） ----------
+export const weekly = async () => {
+  const pairs = [];
+  let start;
+  do {
+    const r = await ddb.send(new ScanCommand({ TableName: TABLE, FilterExpression: "sk = :m AND begins_with(pk, :p)", ExpressionAttributeValues: { ":m": "META", ":p": "PAIR#" }, ExclusiveStartKey: start }));
+    pairs.push(...(r.Items || []));
+    start = r.LastEvaluatedKey;
+  } while (start);
+  for (const pair of pairs) {
+    try { await weeklyMail(pair); } catch (e) { console.error("weekly", pair.pk, e.message); }
+  }
+  return { pairs: pairs.length };
+};
+async function weeklyMail(pair) {
+  const since = Date.now() - 7 * 864e5;
+  const r = await ddb.send(new QueryCommand({ TableName: TABLE, KeyConditionExpression: "pk = :p", ExpressionAttributeValues: { ":p": pair.pk } }));
+  const items = r.Items || [];
+  const walks = items.filter((i) => i.sk.startsWith("WALK#") && i.data?.startedAt >= since && !i.data.sim).map((i) => ({ ...i.data, owner: i.owner }));
+  if (!walks.length) return;
+  const people = await Promise.all(pair.members.map(profile));
+  const to = people.map((p) => p?.email).filter(Boolean);
+  if (!to.length) return;
+  const nameOf = (id) => people.find((p) => p?.pk === `USER#${id}`)?.name || "";
+  // 二人が同じ散歩をそれぞれ記録していたら1回と数える
+  const outings = [...new Map(walks.map((w) => [w.seed ?? w.id, w])).values()].sort((a, b) => a.startedAt - b.startedAt);
+  const km = outings.reduce((n, w) => n + w.distance, 0) / 1000;
+  const notes = walks.flatMap((w) => (w.results || []).filter((x) => x.outcome === "done").map((x) => ({ who: nameOf(w.owner), ...x })));
+  const photoCount = items.filter((i) => i.sk.startsWith("PHOTO#") && i.at >= since).length;
+  const diaries = Object.fromEntries(items.filter((i) => i.sk.startsWith("DIARY#")).map((i) => [i.sk.slice(6), i.text]));
+  const fmt = (t) => new Date(t).toLocaleDateString("ja-JP", { timeZone: "Asia/Tokyo", month: "numeric", day: "numeric", weekday: "short" });
+  const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const subject = `今週のふたり散歩（${fmt(since)}〜${fmt(Date.now())}）`;
+  const walkLines = outings.map((w) => `${fmt(w.startedAt)}　${(w.distance / 1000).toFixed(1)}km${w.stopName ? `　${w.stopName}に寄り道` : ""}`);
+  const memoLines = notes.filter((n) => n.memo).slice(0, 6).map((n) => `${n.who}：${n.text} → ${n.memo}`);
+  const diaryLines = outings.map((w) => diaries[String(w.seed ?? w.id)]).filter(Boolean).slice(0, 2);
+  const text = [subject, "", `散歩 ${outings.length}回 ・ ${km.toFixed(1)}km ・ 気づき ${notes.length} ・ 写真 ${photoCount}枚`, "", ...walkLines,
+    ...(memoLines.length ? ["", "今週のメモ", ...memoLines] : []), ...(diaryLines.length ? ["", "散歩日記", ...diaryLines] : []), "", `アルバムを見る：${SITE}`].join("\n");
+  const html = `<div style="font-family:-apple-system,'Hiragino Sans',sans-serif;color:#111;max-width:520px;line-height:1.7">
+    <p style="font-size:12px;color:#777;letter-spacing:.08em;margin:0">ふたり散歩</p>
+    <h1 style="font-size:22px;margin:4px 0 12px;font-weight:600">${esc(subject)}</h1>
+    <p style="border-top:1px solid #111;border-bottom:1px solid #111;padding:10px 0;font-family:Menlo,monospace;margin:0 0 14px">散歩 ${outings.length}回 ・ ${km.toFixed(1)}km ・ 気づき ${notes.length} ・ 写真 ${photoCount}枚</p>
+    ${walkLines.map((l) => `<p style="margin:0;padding:6px 0;border-bottom:1px solid #ddd">${esc(l)}</p>`).join("")}
+    ${memoLines.length ? `<h2 style="font-size:13px;color:#777;letter-spacing:.08em;margin:18px 0 6px">今週のメモ</h2>${memoLines.map((l) => `<p style="margin:0 0 6px">${esc(l)}</p>`).join("")}` : ""}
+    ${diaryLines.length ? `<h2 style="font-size:13px;color:#777;letter-spacing:.08em;margin:18px 0 6px">散歩日記</h2>${diaryLines.map((l) => `<p style="margin:0 0 10px;white-space:pre-wrap">${esc(l)}</p>`).join("")}` : ""}
+    <p style="margin-top:20px"><a href="${SITE}" style="color:#1f4fd8">アルバムを見る →</a></p></div>`;
+  await ses.send(new SendEmailCommand({
+    FromEmailAddress: `ふたり散歩 <${process.env.MAIL_FROM}>`,
+    Destination: { ToAddresses: to },
+    Content: { Simple: { Subject: { Data: subject, Charset: "UTF-8" }, Body: { Text: { Data: text, Charset: "UTF-8" }, Html: { Data: html, Charset: "UTF-8" } } } },
+  }));
+}
+
+
+// Bedrock（Claude）を呼ぶ。AWSで「Anthropicの利用目的」をまだ申請していないときは、わかるエラーにする
+async function converse(input) {
+  try {
+    return await bedrock.send(new ConverseCommand({ modelId: process.env.MODEL_ID, ...input }));
+  } catch (e) {
+    if (/use case|not available|AccessDenied|ResourceNotFound/i.test(`${e.name} ${e.message}`)) throw fail(503, "AIの準備がまだです（AWSでClaudeの利用申請が必要です）");
+    throw e;
+  }
+}
+
+// ---------- AIのお題 ----------
+// ルート沿いの場所・季節・天気・テーマから、その日だけのお題を4つ作る。
+// 先に作った人の分を保存し、相手も同じお題を受け取る
+async function aiMissions(sub, b) {
+  const pairId = await pairOf(sub);
+  const key = String(b.key || "").slice(0, 40);
+  if (!key) throw fail(400, "どの散歩のお題か指定してください");
+  const saved = await getItem(`PAIR#${pairId}`, `AIM#${key}`);
+  if (saved) return { missions: saved.missions };
+  const clean = (v, n) => String(v || "").replace(/[\r\n]/g, " ").slice(0, n);
+  const places = (Array.isArray(b.places) ? b.places : []).slice(0, 10).map((p) => `${clean(p.name, 40)}（${clean(p.label, 12)}）`);
+  const facts = [
+    `季節：${clean(b.season, 6)}`, b.weather ? `天気：${clean(b.weather, 20)}` : "", b.night ? "日が暮れてからの散歩" : "",
+    b.theme ? `今日のテーマ：${clean(b.theme, 12)}` : "", b.stop ? `寄り道先：${clean(b.stop, 40)}` : "", b.meet ? `二手に分かれて合流する場所：${clean(b.meet, 40)}` : "",
+    places.length ? `ルート沿いにある場所：${places.join("、")}` : "",
+  ].filter(Boolean);
+  const res = await converse({
+    system: [{ text: [
+      "あなたは、夫婦の散歩アプリのお題を作る係です。お題は、ふだん見過ごしている細部に目を向けさせる「観察」が中心です。",
+      "与えられた場所や季節・天気・テーマにちなんだ、その日だけのお題を4つ作ってください。うち1つは、二人で話す「会話のタネ」にしてください。",
+      "守ること：私有地や店の中に入らないとできないお題、買い物が必要なお題、危ないお題、人をじろじろ見るお題は作らない。場所について確かでない事実（歴史や由来）は書かない。",
+      "形式：JSONだけを返す。[{\"kind\":\"look\"または\"talk\",\"text\":\"お題（60字以内）\",\"tip\":\"観察のコツ（60字以内。talkでは空文字）\"}]",
+    ].join("\n") }],
+    messages: [{ role: "user", content: [{ text: facts.join("\n") }] }],
+    inferenceConfig: { maxTokens: 800, temperature: 0.9 },
+  });
+  const raw = res.output?.message?.content?.map((c) => c.text || "").join("") || "";
+  let list;
+  try { list = JSON.parse(raw.slice(raw.indexOf("["), raw.lastIndexOf("]") + 1)); } catch { throw fail(502, "AIのお題を作れませんでした"); }
+  const missions = (Array.isArray(list) ? list : []).filter((m) => m && m.text).slice(0, 4).map((m) => ({
+    kind: m.kind === "talk" ? "talk" : "look", text: String(m.text).slice(0, 80), tip: m.kind === "talk" ? "" : String(m.tip || "").slice(0, 80),
+  }));
+  if (!missions.length) throw fail(502, "AIのお題を作れませんでした");
+  try {
+    await ddb.send(new PutCommand({ TableName: TABLE, Item: { pk: `PAIR#${pairId}`, sk: `AIM#${key}`, missions, createdAt: Date.now(), ttl: Math.floor(Date.now() / 1000) + 2 * 86400 }, ConditionExpression: "attribute_not_exists(pk)" }));
+  } catch (e) {
+    // 相手が先に作っていたら、そちらを使う
+    if (e.name === "ConditionalCheckFailedException") return { missions: (await getItem(`PAIR#${pairId}`, `AIM#${key}`)).missions };
+    throw e;
+  }
+  return { missions };
 }
