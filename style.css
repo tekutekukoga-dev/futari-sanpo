@@ -267,3 +267,13 @@ input[type="range"] { width: 100%; accent-color: var(--accent); height: 32px; ma
 .backup .actions .secondary { font-size: 14px; min-height: 42px; }
 /* 見どころのポップアップのボタン */
 .poipop button { margin-top: 6px; background: #2e7d5b; color: #fff; border-radius: 8px; padding: 6px 10px; font-weight: 600; font-size: 13px; }
+
+/* 別行動 */
+.meetbox { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.splitbox { display: flex; flex-direction: column; gap: 8px; }
+.splitbox .primary.reco::after { content: "（おすすめ）"; font-weight: 400; font-size: 13px; margin-left: 4px; }
+.splitbox #btnBranchB { background: #7b4fa0; }
+.chip.meet { background: #7b4fa0; color: #fff; }
+.kind.split, .kind.choose { color: #7b4fa0; }
+.pin.meet { background: #7b4fa0; }
+.pin.fork { background: #4a5568; }

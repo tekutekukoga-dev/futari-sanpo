@@ -145,6 +145,11 @@ const plan = {
   interval: store.get("interval", 8),
   turnAlert: store.get("turnAlert", false),
   theme: store.get("theme", "any"),
+  split: store.get("split", 0),
+  meet: store.get("meet", "stop"),
+  meetCands: [],
+  meetChosen: null,
+  role: "A",
   weather: null,
   candidates: [],
   chosen: null,
@@ -197,15 +202,15 @@ function addArrowImage(m) {
   g.fillStyle = "#fff"; g.fill();
   m.addImage("route-arrow", g.getImageData(0, 0, s, s), { pixelRatio: 2 });
 }
-function setRoute(m, coords, id = "route") {
+function setRoute(m, coords, id = "route", color = ROUTE_COLOR, dashed = false) {
   if (!m.isReady) return;
   const data = lineData(coords);
   if (m.getSource(id)) return m.getSource(id).setData(data);
   m.addSource(id, { type: "geojson", data });
   const layout = { "line-join": "round", "line-cap": "round" };
   m.addLayer({ id: id + "-casing", type: "line", source: id, layout, paint: { "line-color": "#ffffff", "line-width": 10, "line-opacity": 0.9 } });
-  m.addLayer({ id: id + "-line", type: "line", source: id, layout, paint: { "line-color": ROUTE_COLOR, "line-width": 6 } });
-  m.addLayer({ id: id + "-arrows", type: "symbol", source: id, layout: { "symbol-placement": "line", "symbol-spacing": 70, "icon-image": "route-arrow", "icon-allow-overlap": true, "icon-ignore-placement": true, "icon-rotation-alignment": "map" } });
+  m.addLayer({ id: id + "-line", type: "line", source: id, layout, paint: { "line-color": color, "line-width": dashed ? 4 : 6, ...(dashed ? { "line-dasharray": [1.5, 1.5] } : {}) } });
+  if (!dashed) m.addLayer({ id: id + "-arrows", type: "symbol", source: id, layout: { "symbol-placement": "line", "symbol-spacing": 70, "icon-image": "route-arrow", "icon-allow-overlap": true, "icon-ignore-placement": true, "icon-rotation-alignment": "map" } });
 }
 function clearRoute(m, id = "route") {
   if (!m.isReady) return;
@@ -425,11 +430,13 @@ async function loadPois(route) {
     }
     if (walk && walk.route === route) drawWalkRoute();
   };
-  const detailed = findPois(route).catch(() => null);
-  const quick = await poisFromTiles(route).catch(() => []);
+  // 別行動があるときは、もう一方の道のまわりも探す
+  const geo = route.split ? { coords: route.coords.concat(route.split.branchB) } : route;
+  const detailed = findPois(geo).catch(() => null);
+  const quick = await poisFromTiles(geo).catch(() => []);
   show(quick);
   const more = await detailed;
-  if (more && more.length) show(tidyPois(route, [...more, ...quick]));
+  if (more && more.length) show(tidyPois(geo, [...more, ...quick]));
 }
 function drawPois(m, pois, bucket) {
   (pois || []).forEach((p) => {
@@ -445,7 +452,7 @@ function showPoi(m, p) {
   if (p.wiki) { const a = document.createElement("a"); a.href = p.wiki; a.target = "_blank"; a.rel = "noopener"; a.textContent = "Wikipediaで読む"; box.append(a); }
   const popup = new maplibregl.Popup({ offset: 16, closeButton: false, maxWidth: "240px" });
   // ルートから少し離れた場所なら、そこを通るように道を引き直せる
-  const onPlan = m === planMap && plan.route, onWalk = m === walkMap && walk && !walk.resting;
+  const onPlan = m === planMap && plan.route && !plan.route.split, onWalk = m === walkMap && walk && !walk.resting && !(walk.split && !walk.met);
   if ((onPlan || onWalk) && routeDistance(onPlan ? plan.route : walk.route, p.pos) > 15) {
     const b = document.createElement("button"); b.textContent = "ここに寄る";
     b.onclick = () => { popup.remove(); onPlan ? addDetour(p) : reroute(p); };
@@ -466,7 +473,12 @@ async function addDetour(poi) {
   const stopIndex = r.stopIndex != null ? (r.stopIndex >= at ? r.stopIndex + 1 : r.stopIndex) : null;
   try {
     const nr = shapeRoute(await osrm(pts), pts, stopIndex);
-    nr.pois = r.pois; nr.detours = [...(r.detours || []), poi.name];
+    nr.pois = r.pois;
+    if (walk.split && walk.branch && !walk.met) {
+      let bi = 0, bd = Infinity;
+      nr.coords.forEach((c, i) => { const d = dist(c, walk.split.meetPos); if (d < bd) { bd = d; bi = i; } });
+      walk.meetAlong = nr.cum[bi];
+    } nr.detours = [...(r.detours || []), poi.name];
     plan.route = nr;
     showSummary(); await drawPlan(false);
     toast(`「${poi.name}」に寄るルートにしました（${fmtDist(Math.max(0, nr.total - r.total))}増えます）`);
@@ -482,6 +494,12 @@ function initPlanMap() {
 async function drawPlan(fit = true) {
   await planMap.ready;
   planMarkers.forEach((mk) => mk.remove()); planMarkers = [];
+  if (plan.route && plan.route.split) {
+    const sp = plan.route.split;
+    setRoute(planMap, sp.branchB, "routeB", BRANCH_B_COLOR);
+    planMarkers.push(htmlMarker(planMap, pointAt(plan.route, sp.startAlong), mkEl("pin fork", "分かれ道"), { anchor: "bottom", offset: [0, -6] }));
+    planMarkers.push(htmlMarker(planMap, sp.meetPos, mkEl("pin meet", `合流：${sp.meetName}`), { anchor: "bottom", offset: [0, -6] }));
+  } else clearRoute(planMap, "routeB");
   if (plan.route) {
     setRoute(planMap, plan.route.coords);
     if (fit) planMap.fitBounds(boundsOf(plan.route.coords), { padding: 36, animate: false });
@@ -610,15 +628,60 @@ function renderCandidates() {
 }
 function chooseCandidate(c) { plan.chosen = c; renderCandidates(); buildRoute(); }
 
+// 経路サーバーは2つ。ふだんはOSRMを使い、つながらないときはValhallaに切り替えて、しばらくそちらを使う
+let osrmDownUntil = 0;
 // straight: 経由地でUターンさせず、通り抜けさせる（行き止まりの往復を減らす）
 async function osrm(points, straight) {
+  if (Date.now() > osrmDownUntil) {
+    try { return await osrmMain(points, straight); }
+    catch (e) { if (e.noRoute) throw e; osrmDownUntil = Date.now() + 5 * 60000; }
+  }
+  return valhalla(points, straight);
+}
+async function osrmMain(points, straight) {
   const coords = points.map((p) => `${p[1].toFixed(6)},${p[0].toFixed(6)}`).join(";");
-  const res = await fetch(`${OSRM}${coords}?overview=full&geometries=geojson&steps=true&continue_straight=${straight ? "true" : "false"}`, { signal: AbortSignal.timeout(15000) }).catch(() => null);
-  if (!res) throw new Error("ルートを作れませんでした。電波の良いところでもう一度お試しください");
-  if (!res.ok) throw new Error("ルートを作れませんでした。少し待ってからもう一度お試しください");
+  const res = await fetch(`${OSRM}${coords}?overview=full&geometries=geojson&steps=true&continue_straight=${straight ? "true" : "false"}`, { signal: AbortSignal.timeout(8000) });
+  if (!res.ok) throw new Error("osrm " + res.status);
   const data = await res.json();
-  if (data.code !== "Ok" || !data.routes.length) throw new Error("この場所では歩くルートが見つかりませんでした");
+  if (data.code !== "Ok" || !data.routes.length) throw Object.assign(new Error("この場所では歩くルートが見つかりませんでした"), { noRoute: true });
   return data.routes[0];
+}
+// Valhallaの結果を、OSRMと同じ形に直して返す
+const VALHALLA = "https://valhalla1.openstreetmap.de/route";
+const VH_TURN = { 9: "slight right", 10: "right", 11: "sharp right", 12: "uturn", 13: "uturn", 14: "sharp left", 15: "left", 16: "slight left" };
+function decodePolyline6(str) {
+  const out = []; let i = 0, lat = 0, lon = 0;
+  while (i < str.length) {
+    for (const k of [0, 1]) {
+      let shift = 0, result = 0, b;
+      do { b = str.charCodeAt(i++) - 63; result |= (b & 0x1f) << shift; shift += 5; } while (b >= 0x20);
+      const d = result & 1 ? ~(result >> 1) : result >> 1;
+      if (k === 0) lat += d; else lon += d;
+    }
+    out.push([lon / 1e6, lat / 1e6]);
+  }
+  return out;
+}
+async function valhalla(points, straight) {
+  const locations = points.map((p, i) => ({ lat: +p[0].toFixed(6), lon: +p[1].toFixed(6), type: i === 0 || i === points.length - 1 || !straight ? "break" : "break_through" }));
+  const q = encodeURIComponent(JSON.stringify({ locations, costing: "pedestrian", directions_options: { units: "kilometers" } }));
+  const res = await fetch(`${VALHALLA}?json=${q}`, { signal: AbortSignal.timeout(15000) }).catch(() => null);
+  if (!res) throw new Error("ルートを作れませんでした。電波の良いところでもう一度お試しください");
+  if (!res.ok) throw new Error(res.status === 400 ? "この場所では歩くルートが見つかりませんでした" : "ルートを作れませんでした。少し待ってからもう一度お試しください");
+  const trip = (await res.json()).trip;
+  const coordinates = [];
+  const legs = trip.legs.map((leg) => {
+    const shape = decodePolyline6(leg.shape);
+    coordinates.push(...(coordinates.length ? shape.slice(1) : shape));
+    return {
+      steps: leg.maneuvers.map((m) => ({
+        distance: m.length * 1000, name: (m.street_names || [])[0] || "",
+        maneuver: [1, 2, 3].includes(m.type) ? { type: "depart" } : [4, 5, 6].includes(m.type) ? { type: "arrive" }
+          : VH_TURN[m.type] ? { type: "turn", modifier: VH_TURN[m.type] } : { type: "continue", modifier: "straight" },
+      })),
+    };
+  });
+  return { distance: trip.summary.length * 1000, geometry: { coordinates }, legs };
 }
 
 // OSRMの結果を、案内に使いやすい形にする
@@ -679,11 +742,103 @@ function overlapRatio(route, ignore = []) {
   return (over * step) / route.total;
 }
 
+// ---------- 別行動（二手に分かれて合流） ----------
+const BRANCH_B_COLOR = "#8e5bd0";
+// ルートのうち、along a〜b の区間だけを取り出す
+function sliceCoords(route, a, b) {
+  const out = [pointAt(route, a)];
+  route.coords.forEach((c, i) => { if (route.cum[i] > a && route.cum[i] < b) out.push(c); });
+  out.push(pointAt(route, b));
+  return out;
+}
+// 合流場所：寄り道先と同じにするか、別に選んだ場所
+function meetPoint() {
+  if (plan.meet === "stop") return plan.stop !== "none" && plan.chosen ? { name: plan.chosen.name, pos: plan.chosen.pos } : null;
+  return plan.meetChosen ? { name: plan.meetChosen.name, pos: plan.meetChosen.pos } : null;
+}
+// 経由地の並び：[家, 分かれ道, 寄せる点, 合流場所, (寄り道先), 帰りの経由地, 家]。
+// 2本の道は「寄せる点」だけが違うので、分かれ道までと合流後は同じ道になる
+function composeSplit(A, B, meta) {
+  A.split = {
+    ...meta, B,
+    startAlong: A.legEnds[0], meetAlongA: A.legEnds[2], meetAlongB: B.legEnds[2],
+    lenA: A.legEnds[2] - A.legEnds[0], lenB: B.legEnds[2] - B.legEnds[0],
+  };
+  A.split.branchA = sliceCoords(A, A.legEnds[0], A.legEnds[2]);
+  A.split.branchB = sliceCoords(B, B.legEnds[0], B.legEnds[2]);
+  return A;
+}
+// 2本の別行動の道が、どれくらい同じ道を通っているか
+function branchOverlap(sp) {
+  const a = sp.branchA, b = sp.branchB;
+  let n = 0, over = 0;
+  for (let i = 0; i < a.length; i += 2) {
+    if (dist(a[i], a[0]) < 60 || dist(a[i], a[a.length - 1]) < 60) continue;
+    n++;
+    if (b.some((q) => dist(a[i], q) < 15)) over++;
+  }
+  return n ? over / n : 0;
+}
+async function makeSplitRoute() {
+  const home = plan.home, M = meetPoint(), T = loopMeters(), L = plan.split * 60 * WALK_SPEED;
+  const meetIsStop = plan.meet === "stop";
+  const stopPos = !meetIsStop && plan.chosen && plan.stop !== "none" ? plan.chosen.pos : null;
+  const stopIndex = meetIsStop ? 3 : stopPos ? 4 : null;
+  const bM = bearing(home, M.pos), dM = Math.max(dist(home, M.pos), 300);
+  const r = rng(plan.seed ^ 0x51);
+  const first = r() < 0.5 ? 1 : -1;
+  const tries = [first, -first].flatMap((side) => [50, 75].map((ang) => ({ side, ang })));
+  const ignore = [home, M.pos, ...(stopPos ? [stopPos] : [])];
+  let best = null, f = 1, sDist = L / 1.7;
+  for (let i = 0; i < tries.length; i++) {
+    const { side, ang } = tries[i];
+    // 分かれ道は、合流場所から家の方へ少し戻った横に置く。2本の道は、その間を左右にふくらませて作る
+    const S = dest(M.pos, bearing(M.pos, home) + side * ang, sDist);
+    const mid = [(S[0] + M.pos[0]) / 2, (S[1] + M.pos[1]) / 2], bSM = bearing(S, M.pos);
+    const R = dest(home, bM - side * 70, dM * 0.8 * f);
+    // 合流のあとに寄り道先があるときは、寄り道先を帰り道の経由地にする
+    const tail = stopPos ? [stopPos, home] : [R, home];
+    const make = async (off, sgn) => {
+      const pts = [home, S, dest(mid, bSM + sgn * 90, off), M.pos, ...tail];
+      return { route: shapeRoute(await osrm(pts, true), pts, stopIndex), pts };
+    };
+    let offA = L * 0.17, offB = L * 0.17, A, B;
+    try { [A, B] = await Promise.all([make(offA, 1), make(offB, -1)]); } catch { continue; }
+    const blen = (x) => x.route.legEnds[2] - x.route.legEnds[0];
+    // 2本の長さをそろえる：長い方のふくらみを小さく、短い方を大きくして作り直す（最大3回）
+    for (let k = 0; k < 3; k++) {
+      const a = blen(A), b = blen(B);
+      if (Math.abs(a - b) <= Math.max(100, 0.08 * Math.max(a, b))) break;
+      try {
+        const q = Math.min(a, b) / Math.max(a, b);
+        if (a > b) { offA *= Math.max(0.15, q); offB *= 1 / Math.sqrt(q); }
+        else { offB *= Math.max(0.15, q); offA *= 1 / Math.sqrt(q); }
+        [A, B] = await Promise.all([make(offA, 1), make(offB, -1)]);
+      } catch { break; }
+    }
+    const route = composeSplit(A.route, B.route, { meetName: M.name, meetPos: M.pos, minutes: plan.split, wA: A.pts, wB: B.pts, stopIndex });
+    const sp = route.split;
+    const imbalance = Math.abs(sp.lenA - sp.lenB) / Math.max(sp.lenA, sp.lenB);
+    const score = (overlapRatio(A.route, ignore) + overlapRatio(B.route, ignore)) * 2 + Math.abs(route.total - T) / T
+      + imbalance * 3 + branchOverlap(sp) * 2 + Math.abs((sp.lenA + sp.lenB) / 2 - L) / L * 0.7;
+    if (!best || score < best.score) best = { route, score };
+    // 結果から学んで、次の候補では「別行動の長さ」と「帰り道の長さ」を目標に近づける
+    sDist *= Math.max(0.5, Math.min(1.5, L / ((sp.lenA + sp.lenB) / 2)));
+    f = Math.max(0.3, Math.min(2.5, f * (1 + (T / route.total - 1) * 1.5)));
+    if (score < 0.25) break;
+  }
+  if (!best) throw new Error("別行動のルートを作れませんでした。合流場所を変えてみてください");
+  return best.route;
+}
+
 async function buildRoute() {
   if (!plan.home) return showPlanError("先に自宅を設定してください");
   showPlanError("");
   $("#btnMake").disabled = true; $("#btnMake").textContent = "ルートを作っています…";
   try {
+    if (plan.split > 0 && meetPoint()) {
+      plan.route = await makeSplitRoute();
+    } else {
     const r = rng(plan.seed), home = plan.home, rad0 = legRadius(), target = loopMeters();
     // 経由地の置き方を何通りか試す。寄り道先があるときは、左回り・右回りと、寄る順番を入れ替える
     let shapes, stopAt = null;
@@ -717,6 +872,7 @@ async function buildRoute() {
       if (over < 0.03 && off < 0.12) break;
     }
     plan.route = best.route;
+    }
     showSummary();
     await drawPlan();
     loadPois(plan.route);
@@ -736,6 +892,11 @@ function showSummary() {
   const { sunset } = sunTimes(new Date(), plan.home[0], plan.home[1]);
   const night = isNightWalk(Date.now(), r.total / WALK_SPEED / 60, plan.home);
   $("#sumPois").textContent = r.pois ? (r.pois.length ? `ルート沿いに、ちょっと見たい場所が${r.pois.length}か所あります（地図の丸いマーク）` : "") : "ルート沿いの見どころを探しています…";
+  if (r.split) {
+    const sp = r.split, mA = Math.round(sp.lenA / WALK_SPEED / 60), mB = Math.round(sp.lenB / WALK_SPEED / 60);
+    $("#sumSplit").textContent = `途中の「分かれ道」から二手に分かれ、${mA === mB ? `どちらも約${mA}分` : `約${Math.min(mA, mB)}〜${Math.max(mA, mB)}分`}歩いて「${sp.meetName}」で合流します（青と紫の道）` +
+      (isNightWalk(Date.now(), r.total / WALK_SPEED / 60, plan.home) ? "。日が暮れているので、明るい道を選んで気をつけて歩いてください" : "");
+  } else $("#sumSplit").textContent = "";
   const tk = themeKey(plan.seed);
   $("#sumTheme").textContent = tk ? `今日のテーマは「${THEMES[tk].label}」` : "";
   $("#sumWeather").textContent = "";
@@ -754,9 +915,39 @@ function showSummary() {
 }
 function showPlanError(msg) { $("#planError").textContent = msg; $("#planError").hidden = !msg; }
 
+// 合流場所の候補を探す（「寄り道先」を選んだときは寄り道先をそのまま使う）
+async function prepareMeet() {
+  plan.meetCands = []; plan.meetChosen = null;
+  renderMeetCands();
+  if (!plan.split) return true;
+  if (plan.meet === "stop") {
+    if (plan.stop === "none" || !plan.chosen) { showPlanError("合流場所を「寄り道先」にするには、寄り道先を選んでください"); return false; }
+    return true;
+  }
+  plan.meetCands = (await findCandidates(plan.meet).catch(() => [])).filter((c) => !plan.chosen || c.id !== plan.chosen.id);
+  plan.meetChosen = plan.meetCands[0] || null;
+  renderMeetCands();
+  if (!plan.meetChosen) { showPlanError("合流場所にちょうどいい場所が見つかりませんでした。合流場所の種類を変えてみてください"); return false; }
+  return true;
+}
+function renderMeetCands() {
+  const box = $("#meetCands");
+  box.innerHTML = "";
+  plan.meetCands.forEach((c) => {
+    const b = document.createElement("button");
+    b.className = plan.meetChosen && plan.meetChosen.id === c.id ? "on" : "";
+    b.innerHTML = `<span></span><span class="d">家から${fmtKm(c.d)}km</span>`;
+    b.firstChild.textContent = c.name;
+    b.onclick = () => { plan.meetChosen = c; renderMeetCands(); buildRoute(); };
+    box.appendChild(b);
+  });
+}
+
 async function onMake() {
   if (!plan.home) return showPlanError("先に自宅を設定してください");
-  if (plan.stop === "none") { plan.chosen = null; return buildRoute(); }
+  showPlanError("");
+  plan.route = null; $("#routeSummary").hidden = true;
+  if (plan.stop === "none") { plan.chosen = null; if (await prepareMeet()) await buildRoute(); else drawPlan(); return; }
   $("#btnMake").disabled = true; $("#btnMake").textContent = plan.stop === "any" ? "寄り道先を探しています…" : `${STOP_TYPES[plan.stop].label}を探しています…`;
   try {
     if (plan.stop === "any") {
@@ -773,7 +964,7 @@ async function onMake() {
     plan.chosen = plan.candidates[Math.floor(r() * Math.min(3, plan.candidates.length))] || null;
     renderCandidates();
     drawPlan();
-    if (plan.chosen) await buildRoute();
+    if (plan.chosen && await prepareMeet()) await buildRoute();
   } catch (e) {
     showPlanError(e.message);
   } finally {
@@ -787,6 +978,7 @@ function shareLink() {
     h: plan.home.map((v) => +v.toFixed(5)), m: plan.minutes, i: plan.interval, s: plan.seed, st: plan.stop, th: plan.theme,
     w: plan.route && plan.route.detours ? plan.route.waypoints.map((q) => q.map((v) => +v.toFixed(5))) : undefined,
     si: plan.route && plan.route.detours ? plan.route.stopIndex : undefined, dt: plan.route && plan.route.detours,
+    sp: plan.route && plan.route.split ? (({ wA, wB, stopIndex, meetName, meetPos, minutes }) => ({ wA: wA.map((q) => q.map((v) => +v.toFixed(5))), wB: wB.map((q) => q.map((v) => +v.toFixed(5))), si: stopIndex, n: meetName, p: meetPos, min: minutes }))(plan.route.split) : undefined,
     c: plan.chosen && plan.stop !== "none" ? { n: plan.chosen.name, p: plan.chosen.pos.map((v) => +v.toFixed(5)), id: plan.chosen.id, t: plan.chosen.type } : null,
   };
   // #以降はサーバーに送られないので、自宅の位置がホスティング先に残らない
@@ -811,7 +1003,13 @@ async function loadShared() {
     $("#sharedBanner").hidden = false;
     $("#planForm").hidden = true; $("#btnMake").hidden = true;
     planMap.jumpTo({ center: ll(plan.home), zoom: 15 });
-    if (p.w) {
+    if (p.sp) {
+      // 別行動のルートは、2本の経由地をそのまま使って同じ道にする。リンクを開いた人には紫の道をすすめる
+      const A = shapeRoute(await osrm(p.sp.wA, true), p.sp.wA, p.sp.si ?? null), B = shapeRoute(await osrm(p.sp.wB, true), p.sp.wB, p.sp.si ?? null);
+      plan.route = composeSplit(A, B, { meetName: p.sp.n, meetPos: p.sp.p, minutes: p.sp.min, wA: p.sp.wA, wB: p.sp.wB, stopIndex: p.sp.si ?? null });
+      plan.split = p.sp.min; plan.role = "B";
+      showSummary(); await drawPlan(); loadPois(plan.route);
+    } else if (p.w) {
       // 寄り道を足したルートは、経由地をそのまま使って同じ道にする
       plan.route = shapeRoute(await osrm(p.w), p.w, p.si ?? null);
       plan.route.detours = p.dt || [];
@@ -964,6 +1162,7 @@ function startWalk(sim) {
     progress: 0, track: [plan.home], pos: plan.home, lastFixAt: Date.now(),
     events: missionPlan(plan.seed, route.total, plan.interval, route.stopAlong, night, themeKey(plan.seed), plan.weather), eventIdx: 0,
     theme: themeKey(plan.seed), weather: plan.weather,
+    split: route.split || null, branch: null, askedBranch: false, met: false, role: plan.role,
     turnAlert: plan.turnAlert, alerted: [], noticed: [],
     inbox: [], results: [], photos: 0,
     stopArrived: false, resting: false, restMs: 0, restStart: 0, off: 0, simAlong: 0, done: false,
@@ -1011,6 +1210,13 @@ function resumeWalkSession() {
 }
 function drawWalkRoute() {
   if (!walkMap || !walkMap.isReady) return;
+  // 別行動：選ぶ前は紫の道を、選んだあとは相手の道を灰色の点線で出す。合流したら消す
+  clearRoute(walkMap, "routeB");
+  if (walk.split && !walk.met) {
+    const sp = walk.split;
+    if (!walk.branch) setRoute(walkMap, sp.branchB, "routeB", BRANCH_B_COLOR);
+    else setRoute(walkMap, walk.branch === "B" ? sp.branchA : sp.branchB, "routeB", "#9aa1a6", true);
+  }
   setRoute(walkMap, walk.route.coords);
   walkMarkers.forEach((mk) => mk.remove()); walkMarkers = [];
   drawPois(walkMap, walk.route.pois, walkMarkers);
@@ -1104,6 +1310,16 @@ function onPosition(p) {
     });
   }
 
+  // 別行動：分かれ道で道を選ぶ → 合流場所に着く
+  if (walk.split) {
+    const sp = walk.split;
+    if (!walk.branch && !walk.askedBranch && prog >= sp.startAlong - 30) { walk.askedBranch = true; offerBranches(); }
+    // 選ばずに青の道を進んでいたら、青の道を選んだことにする
+    if (!walk.branch && prog > sp.startAlong + 100) chooseBranch("A");
+    const meetAlong = walk.meetAlong != null ? walk.meetAlong : walk.branch === "B" ? sp.meetAlongB : sp.meetAlongA;
+    if (walk.branch && !walk.met && prog >= meetAlong - 25) arriveMeet();
+  }
+
   // 寄り道先に到着
   if (r.stopAlong != null && !walk.stopArrived && prog >= r.stopAlong - 25) arriveStop();
 
@@ -1119,6 +1335,48 @@ function onPosition(p) {
   if (prog >= r.total - 25 && prog > r.total * 0.5) return finishWalk();
   saveActive();
   updateWalkUI();
+}
+
+// ---------- 別行動の流れ ----------
+function branchInfo(which) {
+  const sp = walk.split, w = which === "B" ? sp.wB : sp.wA, len = which === "B" ? sp.lenB : sp.lenA;
+  return { dir: dir8(bearing(w[1], w[2])), min: Math.max(1, Math.round(len / WALK_SPEED / 60)), color: which === "B" ? "紫" : "青", len };
+}
+function offerBranches() {
+  walk.inbox = walk.inbox.filter((m) => m.kind !== "choose");
+  walk.inbox.unshift({ kind: "choose", id: "choose", text: `分かれ道に着きました。ここから二手に分かれて、「${walk.split.meetName}」で合流します。どちらの道を行く？`, arrivedAt: Date.now() });
+  buzz([200, 100, 200]);
+  renderCard();
+}
+function chooseBranch(which) {
+  const sp = walk.split;
+  walk.inbox = walk.inbox.filter((m) => m.kind !== "choose");
+  walk.branch = which;
+  if (which === "B") {
+    // 紫の道に乗り換える。まだ届いていないお題の位置も、紫の道に合わせて付け替える
+    walk.events.slice(walk.eventIdx).forEach((e) => {
+      if (e.at <= sp.startAlong) return;
+      e.at = e.at <= sp.meetAlongA ? sp.startAlong + (e.at - sp.startAlong) * (sp.lenB / sp.lenA) : e.at + (sp.meetAlongB - sp.meetAlongA);
+    });
+    sp.B.pois = walk.route.pois;
+    walk.route = sp.B;
+    walk.alerted = walk.route.turns.map((t, i) => (t.along < walk.progress ? i : -1)).filter((i) => i >= 0);
+  }
+  const b = branchInfo(which), left = Math.max(0, b.len - Math.max(0, walk.progress - sp.startAlong));
+  walk.meetEta = Date.now() + (left / WALK_SPEED) * 1000 / (walk.sim ? SIM_SPEED : 1);
+  const pick = MISSIONS.split[Math.floor(rng(walk.seed ^ 0x99)() * MISSIONS.split.length)];
+  walk.inbox.unshift(
+    { kind: "split", id: "split", text: `${b.color}の道を行きます。「${sp.meetName}」に${fmtTime(walk.meetEta)}ごろ着く予定です。相手もほぼ同じころに着きます。`, arrivedAt: Date.now() },
+    { ...pick, id: "sp", label: "別行動のお題", arrivedAt: Date.now() },
+  );
+  drawWalkRoute(); renderCard(); saveActive();
+}
+function arriveMeet() {
+  walk.met = true;
+  const sp = walk.split, meetIsStop = sp.stopIndex === 3;
+  MISSIONS.meet.slice(0, meetIsStop ? 2 : 3).forEach((x, i) => walk.inbox.push({ ...x, id: "mt" + i, label: i < 2 ? "合流" : null, arrivedAt: Date.now() }));
+  buzz([200, 100, 200, 100, 200]);
+  drawWalkRoute(); renderCard(); saveActive();
 }
 
 function arriveStop() {
@@ -1144,7 +1402,7 @@ function renderCard() {
   $("#missionCard").hidden = !m;
   if (!m) return updateWalkUI();
   const k = KINDS[m.kind];
-  $("#missionKind").textContent = m.kind === "talk" ? `${k.label}・${TALK_CATS[m.cat]}` : k.label;
+  $("#missionKind").textContent = m.label || (m.kind === "talk" ? `${k.label}・${TALK_CATS[m.cat]}` : k.label);
   $("#missionKind").className = "kind " + m.kind;
   $("#missionText").textContent = m.text;
   $("#missionTip").textContent = m.tip ? `観察のコツ：${m.tip}` : "";
@@ -1152,15 +1410,25 @@ function renderCard() {
   $("#missionMore").textContent = walk.inbox.length > 1 ? `ほかに${walk.inbox.length - 1}つ届いています` : "";
   $("#btnShoot").hidden = !k.shoot;
   $("#btnDone").textContent = k.done;
-  $("#btnNext").hidden = m.kind === "theme";
-  $("#memoBox").hidden = true; $("#missionActions").hidden = false;
+  $("#btnNext").hidden = INFO_KINDS.includes(m.kind);
+  $("#memoBox").hidden = true;
+  // 分かれ道では、2本の道のボタンを出す
+  $("#splitBox").hidden = m.kind !== "choose";
+  $("#missionActions").hidden = m.kind === "choose";
+  if (m.kind === "choose") {
+    ["A", "B"].forEach((w) => {
+      const b = branchInfo(w), btn = $("#btnBranch" + w);
+      btn.textContent = `${b.color}の道（${b.dir}へ・約${b.min}分）`;
+      btn.classList.toggle("reco", (walk.role || "A") === w);
+    });
+  }
   updateWalkUI();
 }
 // 「見つけた」「話した」を押したら、一言メモ欄を開く
 function askMemo() {
   const m = walk.inbox[0];
   if (!m) return;
-  if (m.kind === "theme") return resolve("done");
+  if (INFO_KINDS.includes(m.kind)) return resolve("done");
   $("#missionActions").hidden = true; $("#memoBox").hidden = false;
   $("#memoInput").value = "";
   $("#memoInput").placeholder = m.kind === "talk" ? "どんな話になった？（なくてもOK）" : "何を見つけた？（なくてもOK）。キーボードのマイクで声でも入力できます";
@@ -1168,7 +1436,7 @@ function askMemo() {
 function resolve(outcome, memo) {
   const m = walk.inbox.shift();
   if (!m) return;
-  if (m.kind === "theme") { renderCard(); saveActive(); return; }
+  if (INFO_KINDS.includes(m.kind)) { renderCard(); saveActive(); return; }
   walk.results.push({ id: m.id, kind: m.kind, cat: m.cat || null, text: m.text, outcome, memo: memo || null });
   if (outcome === "done") toast(m.kind === "talk" ? "いい時間でしたね" : "ナイス観察！");
   renderCard(); saveActive();
@@ -1188,6 +1456,9 @@ function updateWalkUI() {
     $("#nextArrow").textContent = "⌂"; $("#nextText").textContent = "このまま家へ"; $("#nextSub").textContent = "";
   }
   $("#statRemain").textContent = `${fmtKm(Math.max(0, r.total - prog))}km`;
+  const showMeet = walk.split && walk.branch && !walk.met;
+  $("#meetBadge").hidden = !showMeet;
+  if (showMeet) $("#meetBadge").textContent = `合流 ${fmtTime(walk.meetEta)}・${walk.split.meetName}`;
   const elapsed = (Date.now() - walk.startedAt) * (walk.sim ? SIM_SPEED : 1);
   $("#statTime").textContent = `${Math.floor(elapsed / 60000)}分経過`;
   const ev = walk.events[walk.eventIdx];
@@ -1232,12 +1503,13 @@ async function finishWalk(early) {
   const w = walk;
   const elapsed = (Date.now() - w.startedAt - w.restMs) * (w.sim ? SIM_SPEED : 1);
   // 届いたまま手をつけなかったお題も「飛ばした」として残す
-  w.inbox.filter((m) => m.kind !== "theme").forEach((m) => w.results.push({ id: m.id, kind: m.kind, cat: m.cat || null, text: m.text, outcome: "skip" }));
+  w.inbox.filter((m) => !INFO_KINDS.includes(m.kind)).forEach((m) => w.results.push({ id: m.id, kind: m.kind, cat: m.cat || null, text: m.text, outcome: "skip" }));
   const record = {
     id: w.id, startedAt: w.startedAt, endedAt: Date.now(), minutes: Math.round(elapsed / 60000),
     distance: Math.round(early ? w.progress : w.route.total), stopName: w.stopName,
     route: w.route.coords.filter((_, i) => i % 3 === 0), track: w.track, photos: w.photos,
     results: w.results, sim: w.sim, night: !!w.night, theme: w.theme || null, weather: w.weather || null,
+    split: w.split ? { meetName: w.split.meetName, branch: w.branch } : null,
   };
   // この散歩で新しく取ったバッジと、上がった称号を記録しておく
   try {
@@ -1572,7 +1844,7 @@ function init() {
   try { navigator.storage && navigator.storage.persist && navigator.storage.persist(); } catch {}
   initPlanMap();
   if (plan.home) setHome(plan.home);
-  const resetRoute = () => { plan.candidates = []; plan.chosen = null; plan.route = null; renderCandidates(); $("#routeSummary").hidden = true; showPlanError(""); drawPlan(); };
+  const resetRoute = () => { plan.candidates = []; plan.chosen = null; plan.route = null; plan.meetCands = []; plan.meetChosen = null; renderCandidates(); renderMeetCands(); $("#routeSummary").hidden = true; showPlanError(""); drawPlan(); };
   // 歩く時間は10分〜3時間のスライダー。動かしている間は表示だけ変え、離したらルートを作り直す
   const range = $("#rangeTime");
   range.value = plan.minutes;
@@ -1584,6 +1856,11 @@ function init() {
   bindSeg("segStop", "stop", resetRoute);
   bindSeg("segInterval", "interval");
   bindSeg("segTheme", "theme", () => plan.route && showSummary());
+  bindSeg("segSplit", "split", () => { $("#meetBox").hidden = !plan.split; resetRoute(); });
+  bindSeg("segMeet", "meet", resetRoute);
+  $("#meetBox").hidden = !plan.split;
+  $("#btnBranchA").onclick = () => chooseBranch("A");
+  $("#btnBranchB").onclick = () => chooseBranch("B");
 
   $("#btnHere").onclick = async () => {
     $("#btnHere").disabled = true;

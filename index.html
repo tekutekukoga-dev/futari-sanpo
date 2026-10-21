@@ -10,7 +10,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Zen+Maru+Gothic:wght@700&display=swap">
 <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
-<link rel="stylesheet" href="style.css?v=13">
+<link rel="stylesheet" href="style.css?v=15">
 </head>
 <body>
 
@@ -48,6 +48,19 @@
       </div>
       <div id="candidates" class="candidates"></div>
     </div>
+    <div class="item col">
+      <span class="itemlabel">別行動（途中で二手に分かれて、合流する）</span>
+      <div class="seg" id="segSplit">
+        <button data-v="0">しない</button><button data-v="10">10分</button><button data-v="15">15分</button><button data-v="20">20分</button>
+      </div>
+      <div id="meetBox" class="meetbox" hidden>
+        <span class="itemlabel">合流場所</span>
+        <div class="seg wrap" id="segMeet">
+          <button data-v="stop">寄り道先</button><button data-v="shrine">神社・お寺</button><button data-v="park">公園</button><button data-v="historic">史跡</button><button data-v="viewpoint">景色のいい所</button>
+        </div>
+        <div id="meetCands" class="candidates"></div>
+      </div>
+    </div>
     <div class="item">
       <label class="itemlabel" for="chkTurn">曲がり角で知らせる<br><span class="small">音・画面の点滅・振動（対応機種のみ）。画面をつけたままになります</span></label>
       <input type="checkbox" id="chkTurn" class="toggle" switch>
@@ -76,6 +89,7 @@
     <ul class="facts">
       <li id="sumLoop"></li>
       <li id="sumStop"></li>
+      <li id="sumSplit"></li>
       <li id="sumPois"></li>
       <li id="sumTheme"></li>
       <li id="sumWeather"></li>
@@ -106,6 +120,7 @@
     <span id="simBadge" class="chip warn" hidden>試しモード（8倍速）</span>
     <span id="nightBadge" class="chip night" hidden>夜さんぽ</span>
     <span id="themeBadge" class="chip" hidden></span>
+    <span id="meetBadge" class="chip meet" hidden></span>
     <span id="offRoute" class="chip warn" hidden>ルートから外れています <button id="btnReroute" class="link">引き直す</button></span>
   </div>
 
@@ -136,6 +151,11 @@
           <button class="primary" id="btnMemoSave">残す</button>
           <button class="secondary" id="btnMemoSkip">メモなしで次へ</button>
         </div>
+      </div>
+      <div id="splitBox" class="splitbox" hidden>
+        <button class="primary" id="btnBranchA"></button>
+        <button class="primary" id="btnBranchB"></button>
+        <p class="small muted">二人で相談して、違う方を選んでください。相手の道も地図に点線で出ます</p>
       </div>
       <div class="actions" id="missionActions">
         <label class="secondary" for="photoInput" id="btnShoot">撮る</label>
@@ -231,8 +251,8 @@
 <div id="toast" class="toast" hidden></div>
 
 <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
-<script src="missions.js?v=13"></script>
-<script src="badges.js?v=13"></script>
-<script src="app.js?v=13"></script>
+<script src="missions.js?v=15"></script>
+<script src="badges.js?v=15"></script>
+<script src="app.js?v=15"></script>
 </body>
 </html>
