@@ -4,6 +4,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 AWS=${AWS:-aws}
+export AWS_DEFAULT_REGION=ap-northeast-1
 [ -f cloud-config.js ] || { echo "cloud-config.js がありません。先に infra/deploy.sh を実行してください"; exit 1; }
 BUCKET=$(python3 -c 'import re;t=open("cloud-config.js").read();print(re.search(r"\"siteBucket\": \"([^\"]+)\"",t).group(1))')
 DIST=$(python3 -c 'import re;t=open("cloud-config.js").read();print(re.search(r"\"distributionId\": \"([^\"]+)\"",t).group(1))')
