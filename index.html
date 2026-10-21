@@ -9,7 +9,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Zen+Maru+Gothic:wght@500;700&family=Noto+Sans+JP:wght@400;600&display=swap">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
-<link rel="stylesheet" href="style.css?v=3">
+<link rel="stylesheet" href="style.css?v=4">
 </head>
 <body>
 <header class="topbar">
@@ -66,6 +66,7 @@
         <div><span class="big" id="sumTime">-</span><span class="unit">分</span></div>
         <div class="stopname" id="sumStop"></div>
       </div>
+      <p class="hint" id="sumSun"></p>
       <button id="btnStart" class="primary">出発する</button>
       <div class="row gap">
         <button id="btnShare" class="ghost">パートナーに送る</button>
@@ -78,7 +79,10 @@
 
   <!-- 散歩中 -->
   <section id="view-walk" class="view walk" hidden>
-    <div id="simBadge" class="simbadge" hidden>試しモード（8倍速）</div>
+    <div class="row gap">
+      <div id="simBadge" class="simbadge" hidden>試しモード（8倍速）</div>
+      <div id="nightBadge" class="simbadge night" hidden>夜さんぽ・暗い道では立ち止まって画面を見てね</div>
+    </div>
 
     <div class="scoreboard" aria-label="今日の勝負">
       <div class="side me"><span class="who">わたし</span><span class="pts" id="scoreMe">0</span></div>
@@ -126,7 +130,18 @@
   <!-- アルバム -->
   <section id="view-album" class="view" hidden>
     <h2>アルバム</h2>
+    <div class="titlecard">
+      <span class="label">いまの称号</span>
+      <div class="row"><b id="titleName" class="titlename"></b><span id="titlePts" class="muted"></span></div>
+      <div class="bar"><span id="titleBar"></span></div>
+      <span id="titleNext" class="hint"></span>
+    </div>
     <div id="albumTotal" class="total" hidden></div>
+    <details class="badges" open>
+      <summary>バッジ <span id="badgeCount" class="muted"></span></summary>
+      <div id="badgeGrid" class="badgegrid"></div>
+    </details>
+    <h2>散歩の記録</h2>
     <div id="albumList" class="albumlist"></div>
   </section>
 
@@ -134,10 +149,16 @@
     <button id="btnBack" class="ghost">← アルバムに戻る</button>
     <h2 id="detailTitle"></h2>
     <p id="detailMeta" class="muted"></p>
+    <div id="detailNight" class="simbadge night" hidden>夜さんぽ</div>
     <div id="detailResult" class="result" hidden>
       <div class="resulthead" id="resultHead"></div>
       <div class="resultscore" id="resultScore"></div>
       <div class="penalty" id="resultPenalty"></div>
+    </div>
+    <div id="detailNew" class="newbadges" hidden>
+      <div id="newTitle" class="newtitle" hidden></div>
+      <span class="label">この散歩で取ったバッジ</span>
+      <div id="newBadges" class="badgegrid"></div>
     </div>
     <div id="detailMap" class="map"></div>
     <div id="detailPhotos" class="photos"></div>
@@ -153,7 +174,8 @@
 <div id="toast" class="toast" hidden></div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
-<script src="missions.js?v=3"></script>
-<script src="app.js?v=3"></script>
+<script src="missions.js?v=4"></script>
+<script src="badges.js?v=4"></script>
+<script src="app.js?v=4"></script>
 </body>
 </html>

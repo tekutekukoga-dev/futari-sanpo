@@ -82,6 +82,30 @@ function project(p, a, b) {
   return { t, d: dist(p, q) };
 }
 
+// 日の出・日の入りの時刻（天文計算の近似式。誤差は数分程度）
+function sunTimes(date, lat, lon) {
+  const dayMs = 864e5, J1970 = 2440588, J2000 = 2451545, e = rad(23.4397);
+  const fromJulian = (j) => new Date((j + 0.5 - J1970) * dayMs);
+  const d = date.valueOf() / dayMs - 0.5 + J1970 - J2000;
+  const lw = rad(-lon), phi = rad(lat);
+  const n = Math.round(d - 0.0009 - lw / (2 * Math.PI));
+  const ds = 0.0009 + lw / (2 * Math.PI) + n;
+  const M = rad(357.5291 + 0.98560028 * ds);
+  const C = rad(1.9148 * Math.sin(M) + 0.02 * Math.sin(2 * M) + 0.0003 * Math.sin(3 * M));
+  const Lsun = M + C + rad(102.9372) + Math.PI;
+  const dec = Math.asin(Math.sin(e) * Math.sin(Lsun));
+  const noon = J2000 + ds + 0.0053 * Math.sin(M) - 0.0069 * Math.sin(2 * Lsun);
+  const w = Math.acos((Math.sin(rad(-0.833)) - Math.sin(phi) * Math.sin(dec)) / (Math.cos(phi) * Math.cos(dec)));
+  const set = J2000 + 0.0009 + (w + lw) / (2 * Math.PI) + n + 0.0053 * Math.sin(M) - 0.0069 * Math.sin(2 * Lsun);
+  return { sunrise: fromJulian(noon - (set - noon)), sunset: fromJulian(set) };
+}
+// 散歩の真ん中の時刻が、日の入り後か日の出前なら夜さんぽ
+function isNightWalk(start, minutes, home) {
+  const mid = start + minutes * 30000;
+  const { sunrise, sunset } = sunTimes(new Date(mid), home[0], home[1]);
+  return mid >= sunset.getTime() || mid < sunrise.getTime();
+}
+
 function rng(seed) {
   let s = seed >>> 0;
   return () => { s = (s + 0x6D2B79F5) >>> 0; let t = s; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
@@ -336,6 +360,9 @@ function showSummary() {
   $("#sumDist").textContent = fmtKm(r.total);
   $("#sumTime").textContent = Math.round(r.total / WALK_SPEED / 60);
   $("#sumStop").textContent = plan.chosen && plan.stop !== "none" ? `寄り道：${plan.chosen.name}` : "寄り道なしの周回ルート";
+  const { sunset } = sunTimes(new Date(), plan.home[0], plan.home[1]);
+  const night = isNightWalk(Date.now(), r.total / WALK_SPEED / 60, plan.home);
+  $("#sumSun").textContent = night ? `今日の日の入りは${fmtTime(sunset)}。いま出発すると「夜さんぽ」のお題になります` : `今日の日の入りは${fmtTime(sunset)}。日が暮れてから出発すると、夜用のお題になります`;
   $("#routeSummary").hidden = false;
 }
 function showPlanError(msg) { $("#planError").textContent = msg; $("#planError").hidden = !msg; }
@@ -393,12 +420,13 @@ async function loadShared() {
 
 // ---------- お題の予定 ----------
 // お題は「歩いた距離」で届く。同じseedなら二人のスマホで同じ場所・同じお題になる
-function missionPlan(seed, total, interval, stopAlong) {
+function missionPlan(seed, total, interval, stopAlong, night) {
   const r = rng(seed ^ 0x5a5a);
   const pools = {};
-  ["race", "photo", "guess", "quiz", "game", "coop"].forEach((k) => (pools[k] = shuffle(MISSIONS[k], r)));
-  pools.photo = shuffle([...pools.photo, ...MISSIONS[seasonKey(new Date().getMonth() + 1)]], r);
-  const rare = shuffle(MISSIONS.rare, r);
+  // 夜は、見つけるもの・撮るものが変わる種類だけ夜用に入れ替える
+  ["race", "photo", "guess", "quiz", "game", "coop"].forEach((k) => (pools[k] = shuffle(night && MISSIONS.night[k] ? MISSIONS.night[k] : MISSIONS[k], r)));
+  if (!night) pools.photo = shuffle([...pools.photo, ...MISSIONS[seasonKey(new Date().getMonth() + 1)]], r);
+  const rare = shuffle(night ? MISSIONS.night.rare : MISSIONS.rare, r);
   const order = ["race", "photo", "quiz", "coop", "game", "guess", "photo", "race", "coop", "quiz", "game", "photo"];
   const used = {};
   const step = interval * 60 * WALK_SPEED;
@@ -416,7 +444,7 @@ function missionPlan(seed, total, interval, stopAlong) {
     }
     events.push({ at, ...m, id: "m" + n });
   }
-  events.push({ at: total * 0.88, ...MISSIONS.final, id: "final" });
+  events.push({ at: total * 0.88, ...(night ? MISSIONS.night.final : MISSIONS.final), id: "final" });
   return events;
 }
 
@@ -425,12 +453,13 @@ let walkMap, walkRouteLine, walkTrackLine, walkMe;
 
 function startWalk(sim) {
   const route = plan.route;
+  const night = isNightWalk(Date.now(), route.total / WALK_SPEED / 60, plan.home);
   walk = {
-    id: "w" + Date.now(), startedAt: Date.now(), sim, route, seed: plan.seed,
+    id: "w" + Date.now(), startedAt: Date.now(), sim, route, seed: plan.seed, night,
     stopName: plan.chosen && plan.stop !== "none" ? plan.chosen.name : null,
     stopMission: STOP_TYPES[plan.stop].mission || null,
     progress: 0, track: [plan.home], pos: plan.home, lastFixAt: Date.now(),
-    events: missionPlan(plan.seed, route.total, plan.interval, route.stopAlong), eventIdx: 0,
+    events: missionPlan(plan.seed, route.total, plan.interval, route.stopAlong, night), eventIdx: 0,
     inbox: [], results: [], me: 0, you: 0, photos: 0,
     stopArrived: false, resting: false, restMs: 0, restStart: 0, off: 0, simAlong: 0, done: false,
   };
@@ -442,6 +471,7 @@ function startWalk(sim) {
 function resumeWalkSession() {
   showView("walk");
   $("#simBadge").hidden = !walk.sim;
+  $("#nightBadge").hidden = !walk.night;
   if (!walkMap) {
     walkMap = makeMap($("#walkMap"));
     walkRouteLine = L.polyline([], { color: ACCENT(), weight: 6, opacity: 0.75 }).addTo(walkMap);
@@ -678,8 +708,15 @@ async function finishWalk(early) {
     distance: Math.round(early ? w.progress : w.route.total), stopName: w.stopName,
     route: w.route.coords.filter((_, i) => i % 3 === 0), track: w.track, photos: w.photos,
     me: w.me, you: w.you, results: w.results,
-    penalty: PENALTIES[Math.floor(rng(w.seed ^ 99)() * PENALTIES.length)], sim: w.sim,
+    penalty: PENALTIES[Math.floor(rng(w.seed ^ 99)() * PENALTIES.length)], sim: w.sim, night: !!w.night,
   };
+  // この散歩で新しく取ったバッジと、上がった称号を記録しておく
+  const before = await allWalks();
+  const s0 = badgeStats(before), s1 = badgeStats([...before, record]);
+  const had = new Set(earnedBadges(s0));
+  record.newBadges = earnedBadges(s1).filter((id) => !had.has(id));
+  const t0 = titleFor(s0.pts), t1 = titleFor(s1.pts);
+  record.newTitle = t1.name !== t0.name ? t1.name : null;
   await putWalk(record);
   store.del("active");
   buzz([200, 100, 200, 100, 400]);
@@ -726,6 +763,7 @@ async function renderAlbum() {
     $("#albumTotal").innerHTML = `<span class="muted">通算成績（${real.length}回）</span><b></b>`;
     $("#albumTotal b").textContent = `${wins}勝 ${loses}敗 ${real.length - wins - loses}分`;
   }
+  renderBadges(walks);
   if (!walks.length) { box.innerHTML = '<p class="empty">まだ散歩の記録はありません。<br>最初の散歩に出かけると、ここに写真と勝負の結果が残ります。</p>'; return; }
   for (const w of walks) {
     const ps = await photosOf(w.id);
@@ -739,6 +777,31 @@ async function renderAlbum() {
     b.onclick = () => openDetail(w.id);
     box.appendChild(b);
   }
+}
+
+function stamp(b, on) {
+  const el = document.createElement("div");
+  el.className = "badge" + (on ? " on" : "");
+  el.innerHTML = '<span class="seal"></span><span class="bname"></span><span class="bdesc"></span>';
+  el.querySelector(".seal").textContent = b.mark;
+  el.querySelector(".bname").textContent = b.name;
+  return el;
+}
+function renderBadges(walks) {
+  const s = badgeStats(walks), t = titleFor(s.pts), have = new Set(earnedBadges(s));
+  $("#titleName").textContent = t.name;
+  $("#titlePts").textContent = `${s.pts}ポイント`;
+  const pct = t.next ? ((s.pts - t.pts) / (t.next.pts - t.pts)) * 100 : 100;
+  $("#titleBar").style.width = `${Math.min(100, pct)}%`;
+  $("#titleNext").textContent = t.next ? `あと${t.next.pts - s.pts}ポイントで「${t.next.name}」` : "最高の称号です";
+  $("#badgeCount").textContent = `${have.size} / ${BADGES.length}`;
+  const grid = $("#badgeGrid");
+  grid.innerHTML = "";
+  BADGES.forEach((b) => {
+    const on = have.has(b.id), el = stamp(b, on);
+    el.querySelector(".bdesc").textContent = on ? b.desc : `${b.desc}（${Math.min(b.get(s), b.need)}/${b.need}）`;
+    grid.appendChild(el);
+  });
 }
 
 let detailMap, detailLayer;
@@ -755,6 +818,13 @@ async function openDetail(id) {
     $("#resultScore").textContent = `${w.me} - ${w.you}`;
     $("#resultPenalty").textContent = w.me === w.you ? "今日は引き分け。仲良く何かおいしいものを食べよう" : w.penalty;
   }
+  const fresh = (w.newBadges || []).map((id) => BADGES.find((b) => b.id === id)).filter(Boolean);
+  $("#detailNew").hidden = !fresh.length && !w.newTitle;
+  $("#newTitle").hidden = !w.newTitle;
+  if (w.newTitle) $("#newTitle").textContent = `称号が「${w.newTitle}」になりました`;
+  $("#newBadges").innerHTML = "";
+  fresh.forEach((b) => { const el = stamp(b, true); el.querySelector(".bdesc").textContent = b.desc; $("#newBadges").appendChild(el); });
+  $("#detailNight").hidden = !w.night;
   if (!detailMap) { detailMap = makeMap($("#detailMap")); detailLayer = L.layerGroup().addTo(detailMap); }
   detailLayer.clearLayers();
   setTimeout(() => {
