@@ -212,3 +212,19 @@ button:disabled { opacity: .5; cursor: default; }
 
 .leaflet-container { font-family: var(--font); background: #e8ece8; }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+
+/* 時間スライダーと切り替えスイッチ */
+.row { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.timelabel { font-size: 20px; font-variant-numeric: tabular-nums; }
+input[type="range"] { width: 100%; accent-color: var(--accent); height: 32px; margin: 2px 0 0; }
+.ticks { display: flex; justify-content: space-between; font-size: 11.5px; color: var(--muted); padding: 0 2px; }
+.ticks span:nth-child(2) { margin-left: 8%; }
+.ticks span:nth-child(3) { margin-right: 4%; }
+.toggle { appearance: none; -webkit-appearance: none; flex: none; width: 51px; height: 31px; border-radius: 99px; background: var(--line); position: relative; cursor: pointer; transition: background .2s; margin: 0; }
+.toggle::after { content: ""; position: absolute; top: 2px; left: 2px; width: 27px; height: 27px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgb(0 0 0 / .3); transition: transform .2s; }
+.toggle:checked { background: var(--accent); }
+.toggle:checked::after { transform: translateX(20px); }
+.item label.itemlabel { line-height: 1.4; }
+/* 曲がり角の手前で、上の案内を点滅させる */
+.walkhead.alert { animation: turnflash .45s ease-in-out 4; }
+@keyframes turnflash { 50% { background: #f2a33a; color: #1c1405; } }

@@ -126,6 +126,7 @@ function shuffle(arr, r) { const a = arr.slice(); for (let i = a.length - 1; i >
 const fmtKm = (m) => (m / 1000).toFixed(1);
 const fmtDist = (m) => (m >= 1000 ? `${fmtKm(m)}km` : `${Math.max(10, Math.round(m / 10) * 10)}m`);
 const fmtTime = (t) => new Date(t).toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit" });
+const fmtMinutes = (m) => (m < 60 ? `${m}分` : `${Math.floor(m / 60)}時間${m % 60 ? `${m % 60}分` : ""}`);
 const fmtDate = (t) => new Date(t).toLocaleDateString("ja-JP", { month: "long", day: "numeric", weekday: "short" });
 
 function buzz(pattern) { try { navigator.vibrate && navigator.vibrate(pattern); } catch {} }
@@ -142,6 +143,7 @@ const plan = {
   minutes: store.get("minutes", 60),
   stop: store.get("stop", "cafe"),
   interval: store.get("interval", 8),
+  turnAlert: store.get("turnAlert", false),
   candidates: [],
   chosen: null,
   seed: Math.floor(Math.random() * 1e9),
@@ -270,7 +272,7 @@ async function findCandidates(type) {
   if (!t.q) return [];
   const r = legRadius(), [lat, lon] = plan.home;
   // お店はそうそう変わらないので、自宅・種類・時間ごとに1週間保存して使い回す
-  const cacheKey = `poi:${type}:${plan.minutes}:${lat.toFixed(4)},${lon.toFixed(4)}`;
+  const cacheKey = `poi:${type}:${Math.round(plan.minutes / 15)}:${lat.toFixed(4)},${lon.toFixed(4)}`;
   const cached = store.get(cacheKey, null);
   let places = cached && Date.now() - cached.at < 7 * 864e5 ? cached.places : null;
   if (!places) {
@@ -374,15 +376,18 @@ async function buildRoute() {
       const θ = r() * 360;
       wps = (f) => [home, dest(home, θ, rad0 * f), dest(home, θ + 60, rad0 * f), home];
     }
-    let f = 1, pts = wps(f), route = await osrm(pts);
-    // 距離が目標から大きくずれたら、経由地の距離を1回だけ調整する
-    const ratio = loopMeters() / route.distance;
-    if (Math.abs(ratio - 1) > 0.2) {
-      f = Math.max(0.3, Math.min(2.2, 1 + (ratio - 1) * (stopIndex ? 1.6 : 1)));
+    // 距離が目標から15%以上ずれたら、経由地の距離を変えて最大3回作り直し、いちばん近いものを使う
+    const target = loopMeters();
+    let f = 1, pts = wps(f), route = await osrm(pts), best = { route, pts };
+    for (let i = 0; i < 3; i++) {
+      const ratio = target / route.distance;
+      if (Math.abs(ratio - 1) < 0.15) break;
+      f = Math.max(0.1, Math.min(2.5, f * (stopIndex ? 1 + (ratio - 1) * 1.6 : ratio)));
       pts = wps(f);
       route = await osrm(pts);
+      if (Math.abs(route.distance - target) < Math.abs(best.route.distance - target)) best = { route, pts };
     }
-    plan.route = shapeRoute(route, pts, stopIndex);
+    plan.route = shapeRoute(best.route, best.pts, stopIndex);
     showSummary();
     drawPlan();
   } catch (e) {
@@ -551,11 +556,46 @@ function sizeWalkMap() {
 }
 window.addEventListener("resize", () => { if (walk) sizeWalkMap(); });
 
+// ---------- 曲がり角の知らせ ----------
+let audioCtx = null, wakeLock = null;
+function unlockAudio() {
+  try { if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)(); audioCtx.resume(); } catch {}
+}
+function chime() {
+  if (!audioCtx) return;
+  [880, 1175].forEach((f, i) => {
+    const o = audioCtx.createOscillator(), g = audioCtx.createGain(), t = audioCtx.currentTime + i * 0.16;
+    o.frequency.value = f; o.type = "sine";
+    g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.3, t + 0.02); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.4);
+    o.connect(g).connect(audioCtx.destination); o.start(t); o.stop(t + 0.45);
+  });
+}
+// iOS 18以降のSafariは、スイッチ型のチェックボックスを切り替えると軽く振動する。それを利用する（効かない機種もある）
+function iosHaptic() {
+  try {
+    const label = document.createElement("label"), input = document.createElement("input");
+    input.type = "checkbox"; input.setAttribute("switch", "");
+    label.appendChild(input); label.style.display = "none";
+    document.body.appendChild(label); label.click(); label.remove();
+  } catch {}
+}
+function alertTurn(t) {
+  chime();
+  buzz(t.dir.includes("右") ? [300] : [120, 100, 120]);
+  iosHaptic(); setTimeout(iosHaptic, 180);
+  const head = $(".walkhead");
+  head.classList.remove("alert"); void head.offsetWidth; head.classList.add("alert");
+}
+async function keepAwake() {
+  try { if ("wakeLock" in navigator && (!wakeLock || wakeLock.released)) wakeLock = await navigator.wakeLock.request("screen"); } catch {}
+}
+
 // ---------- 散歩中 ----------
 let walkMap, walkLayer, walkTrackLine, walkMe;
 
 function startWalk(sim) {
   requestCompass();
+  if (plan.turnAlert) unlockAudio();
   const route = plan.route;
   const night = isNightWalk(Date.now(), route.total / WALK_SPEED / 60, plan.home);
   walk = {
@@ -564,6 +604,7 @@ function startWalk(sim) {
     stopMission: plan.chosen && plan.stop !== "none" ? STOP_TYPES[plan.chosen.type || plan.stop].mission : null,
     progress: 0, track: [plan.home], pos: plan.home, lastFixAt: Date.now(),
     events: missionPlan(plan.seed, route.total, plan.interval, route.stopAlong, night), eventIdx: 0,
+    turnAlert: plan.turnAlert, alerted: [],
     inbox: [], results: [], photos: 0,
     stopArrived: false, resting: false, restMs: 0, restStart: 0, off: 0, simAlong: 0, done: false,
   };
@@ -594,6 +635,11 @@ function resumeWalkSession() {
   else startWatch();
   walk.tick = setInterval(updateWalkUI, 5000);
   cancelAnimationFrame(heading.raf); headingTick();
+  if (walk.turnAlert) {
+    keepAwake();
+    // 読み込み直したあとは、画面に触れるまで音が鳴らせない
+    if (!audioCtx || audioCtx.state !== "running") document.addEventListener("pointerdown", unlockAudio, { once: true });
+  }
   updateWalkUI();
 }
 function drawWalkRoute() {
@@ -614,6 +660,7 @@ function startWatch() {
 document.addEventListener("visibilitychange", () => {
   if (!walk || walk.done || document.visibilityState !== "visible") return;
   if (!walk.sim) { startWatch(); getPosition().then(onPosition).catch(() => {}); }
+  if (walk.turnAlert) { keepAwake(); unlockAudio(); }
   sizeWalkMap();
   updateWalkUI();
 });
@@ -672,6 +719,14 @@ function onPosition(p) {
   }
 
   const r = walk.route, prog = walk.progress;
+
+  // 曲がり角の35m手前で知らせる
+  if (walk.turnAlert) {
+    r.turns.forEach((t, i) => {
+      const ahead = t.along - prog;
+      if (ahead > 0 && ahead < 35 && !walk.alerted.includes(i)) { walk.alerted.push(i); alertTurn(t); }
+    });
+  }
 
   // 寄り道先に到着
   if (r.stopAlong != null && !walk.stopArrived && prog >= r.stopAlong - 25) arriveStop();
@@ -766,7 +821,7 @@ async function reroute() {
     const step = remaining.length > 1 ? remaining[1].at - remaining[0].at : 0;
     remaining.forEach((e, i) => (e.at = Math.min(nr.total * 0.9, Math.max(50, shift) + step * i)));
     walk.events = remaining; walk.eventIdx = 0;
-    walk.route = nr; walk.progress = 0; walk.simAlong = 0; walk.off = 0;
+    walk.route = nr; walk.progress = 0; walk.simAlong = 0; walk.off = 0; walk.alerted = [];
     drawWalkRoute();
     $("#offRoute").hidden = true;
     toast("ここからの道を引き直しました");
@@ -779,6 +834,7 @@ async function finishWalk(early) {
   if (!walk || walk.done) return;
   walk.done = true;
   clearInterval(walk.tick); clearInterval(walk.simTimer); cancelAnimationFrame(heading.raf);
+  try { wakeLock && wakeLock.release(); } catch {}
   if (walk.watch != null) navigator.geolocation.clearWatch(walk.watch);
   const w = walk;
   const elapsed = (Date.now() - w.startedAt - w.restMs) * (w.sim ? SIM_SPEED : 1);
@@ -1002,7 +1058,8 @@ const GUIDE = [
   { step: "3 / 5", title: "歩いているとき", pic: "↑", items: [
     "地図は、向いている方向が上になるように回ります。出発時の「方向へのアクセス」は「許可」を",
     "画面は閉じてOK。開いたときに、通り過ぎた分のお題もまとめて出ます",
-    "曲がり角は画面の上に出ます。暗い道や車の多い道では、立ち止まって見てください",
+    "曲がり角は画面の上に出ます。「曲がり角で知らせる」をオンにすると、手前で音と画面の点滅で知らせます（画面はつけたままになります）",
+    "暗い道や車の多い道では、立ち止まって画面を見てください",
   ] },
   { step: "4 / 5", title: "お題は2種類", pic: "観察 ＋ 会話のタネ", items: [
     "「観察」は、ふだん見過ごしている細かいところに目を向けるお題です",
@@ -1056,7 +1113,14 @@ function init() {
   initPlanMap();
   if (plan.home) setHome(plan.home);
   const resetRoute = () => { plan.candidates = []; plan.chosen = null; plan.route = null; renderCandidates(); $("#routeSummary").hidden = true; showPlanError(""); drawPlan(); };
-  bindSeg("segTime", "minutes", resetRoute);
+  // 歩く時間は10分〜3時間のスライダー。動かしている間は表示だけ変え、離したらルートを作り直す
+  const range = $("#rangeTime");
+  range.value = plan.minutes;
+  $("#timeLabel").textContent = fmtMinutes(plan.minutes);
+  range.addEventListener("input", () => { plan.minutes = +range.value; $("#timeLabel").textContent = fmtMinutes(plan.minutes); });
+  range.addEventListener("change", () => { store.set("minutes", plan.minutes); resetRoute(); });
+  $("#chkTurn").checked = plan.turnAlert;
+  $("#chkTurn").onchange = (e) => { plan.turnAlert = e.target.checked; store.set("turnAlert", plan.turnAlert); if (plan.turnAlert) unlockAudio(); };
   bindSeg("segStop", "stop", resetRoute);
   bindSeg("segInterval", "interval");
 
@@ -1100,7 +1164,7 @@ function init() {
   // 散歩の途中でページが読み込み直されたら、続きから再開する
   const active = store.get("active", null);
   if (active && active.results && Date.now() - active.startedAt < 6 * 3600e3) {
-    walk = { ...active, lastFixAt: 0 };
+    walk = { alerted: [], ...active, lastFixAt: 0 };
     resumeWalkSession();
     toast("散歩の続きから再開しました");
     return;
