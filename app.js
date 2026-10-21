@@ -5,14 +5,16 @@ const $$ = (s) => [...document.querySelectorAll(s)];
 
 const WALK_SPEED = 1.25; // m/s（時速4.5km）
 const SIM_SPEED = 8; // 試しモードの倍速
-const OVERPASS = ["https://overpass-api.de/api/interpreter", "https://overpass.private.coffee/api/interpreter", "https://maps.mail.ru/osm/tools/overpass/api/interpreter"];
+const PHOTON = "https://photon.komoot.io/reverse";
+const OVERPASS = "https://overpass-api.de/api/interpreter";
+const NOMINATIM = "https://nominatim.openstreetmap.org/search";
 const OSRM = "https://routing.openstreetmap.de/routed-foot/route/v1/foot/";
 
 const STOP_TYPES = {
-  cafe: { label: "カフェ", q: '["amenity"="cafe"]', mission: "stop" },
-  bakery: { label: "パン屋", q: '["shop"="bakery"]', mission: "stop" },
-  park: { label: "公園", q: '["leisure"="park"]', mission: "park" },
-  shrine: { label: "神社・お寺", q: '["amenity"="place_of_worship"]', mission: "park" },
+  cafe: { label: "カフェ", tag: "amenity:cafe", q: '["amenity"="cafe"]', phrase: "cafe", mission: "stop" },
+  bakery: { label: "パン屋", tag: "shop:bakery", q: '["shop"="bakery"]', phrase: "bakery", mission: "stop" },
+  park: { label: "公園", tag: "leisure:park", q: '["leisure"="park"]', phrase: "park", mission: "park" },
+  shrine: { label: "神社・お寺", tag: "amenity:place_of_worship", q: '["amenity"="place_of_worship"]', phrase: "place of worship", mission: "park", name: /神社|寺|宮|稲荷|八幡|天神|観音|不動|地蔵|権現|社$/ },
   none: { label: "寄り道なし" },
 };
 
@@ -196,6 +198,38 @@ function getPosition() {
 const loopMeters = () => plan.minutes * 60 * WALK_SPEED;
 const legRadius = () => loopMeters() / 3.9;
 
+// 各検索サービスの結果を { id, name, pos } にそろえる
+async function getJson(url, init = {}) {
+  const res = await fetch(url, { ...init, signal: AbortSignal.timeout(8000) });
+  if (!res.ok) throw new Error(res.status);
+  return res.json();
+}
+// 自宅から目安の距離にある6地点のまわりを、まとめて探す
+async function fromPhoton(t, home, r) {
+  const rings = [0, 60, 120, 180, 240, 300].map((b) => dest(home, b, r));
+  const results = await Promise.allSettled(rings.map((p) =>
+    getJson(`${PHOTON}?lat=${p[0].toFixed(5)}&lon=${p[1].toFixed(5)}&radius=${(r * 0.6 / 1000).toFixed(2)}&limit=15&osm_tag=${t.tag}`)));
+  const ok = results.filter((x) => x.status === "fulfilled");
+  if (!ok.length) throw new Error("photon");
+  return ok.flatMap((x) => x.value.features).map((f) => ({
+    id: f.properties.osm_type + f.properties.osm_id, name: f.properties.name,
+    pos: [f.geometry.coordinates[1], f.geometry.coordinates[0]],
+  }));
+}
+async function fromOverpass(t, home, r) {
+  const q = `[out:json][timeout:15];nwr${t.q}["name"](around:${Math.round(r * 1.6)},${home[0]},${home[1]});out tags center 80;`;
+  const data = await getJson(OVERPASS, { method: "POST", body: "data=" + encodeURIComponent(q), headers: { "Content-Type": "application/x-www-form-urlencoded" } });
+  return data.elements.map((e) => ({
+    id: e.type[0].toUpperCase() + e.id, name: e.tags && e.tags.name,
+    pos: e.lat != null ? [e.lat, e.lon] : [e.center.lat, e.center.lon],
+  }));
+}
+async function fromNominatim(t, home, r) {
+  const a = dest(home, 315, r * 1.6 * Math.SQRT2), b = dest(home, 135, r * 1.6 * Math.SQRT2);
+  const data = await getJson(`${NOMINATIM}?q=${encodeURIComponent(t.phrase)}&viewbox=${a[1]},${a[0]},${b[1]},${b[0]}&bounded=1&format=jsonv2&limit=40`);
+  return data.map((e) => ({ id: e.osm_type[0].toUpperCase() + e.osm_id, name: e.name, pos: [+e.lat, +e.lon] }));
+}
+
 async function findCandidates() {
   const t = STOP_TYPES[plan.stop];
   if (!t.q) return [];
@@ -203,25 +237,20 @@ async function findCandidates() {
   // お店はそうそう変わらないので、自宅・種類・時間ごとに1週間保存して使い回す
   const cacheKey = `poi:${plan.stop}:${plan.minutes}:${lat.toFixed(4)},${lon.toFixed(4)}`;
   const cached = store.get(cacheKey, null);
-  let elements = cached && Date.now() - cached.at < 7 * 864e5 ? cached.elements : null;
-  if (!elements) {
-    const q = `[out:json][timeout:25];nwr${t.q}["name"](around:${Math.round(r * 1.6)},${lat},${lon});out tags center 80;`;
-    // 混んでいると断られることがあるので、予備のサーバーも順に試す
-    for (const url of OVERPASS) {
-      try {
-        const res = await fetch(url, { method: "POST", body: "data=" + encodeURIComponent(q), headers: { "Content-Type": "application/x-www-form-urlencoded" }, signal: AbortSignal.timeout(25000) });
-        if (res.ok) { elements = (await res.json()).elements; break; }
-      } catch {}
+  let places = cached && Date.now() - cached.at < 7 * 864e5 ? cached.places : null;
+  if (!places) {
+    // 検索サービスはどれも混むことがあるので、順に試して最初に取れたものを使う
+    for (const source of [fromPhoton, fromOverpass, fromNominatim]) {
+      try { places = await source(t, plan.home, r); } catch { places = null; }
+      if (places && places.length) break;
     }
-    if (!elements) throw new Error("お店の情報を取得できませんでした。地図のサーバーが混んでいるようです。少し待ってからもう一度お試しください");
-    store.set(cacheKey, { at: Date.now(), elements: elements.map((e) => ({ type: e.type, id: e.id, lat: e.lat, lon: e.lon, center: e.center, tags: { name: e.tags.name } })) });
+    if (!places) throw new Error("お店の情報を取得できませんでした。電波の良いところで、少し待ってからもう一度お試しください");
+    store.set(cacheKey, { at: Date.now(), places });
   }
-  return elements
-    .filter((e) => e.tags && e.tags.name)
-    .map((e) => {
-      const pos = e.lat != null ? [e.lat, e.lon] : [e.center.lat, e.center.lon];
-      return { id: e.type + e.id, name: e.tags.name, pos, d: dist(plan.home, pos) };
-    })
+  const seen = new Set();
+  return places
+    .filter((p) => p.name && (!t.name || t.name.test(p.name)) && !seen.has(p.id) && seen.add(p.id))
+    .map((p) => ({ ...p, d: dist(plan.home, p.pos) }))
     .filter((c) => c.d > r * 0.35 && c.d < r * 1.6)
     .sort((a, b) => Math.abs(a.d - r) - Math.abs(b.d - r))
     .slice(0, 6);
