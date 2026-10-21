@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#2f5d4a">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>ふたり散歩</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Zen+Maru+Gothic:wght@500;700&family=Noto+Sans+JP:wght@400;600&display=swap">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="topbar">
+  <h1>ふたり散歩</h1>
+  <span id="todayLabel" class="today"></span>
+</header>
+
+<main>
+  <!-- ルートを決める -->
+  <section id="view-plan" class="view">
+    <div id="planMap" class="map"></div>
+    <p class="hint" id="mapHint">地図をタップすると、その場所を自宅に設定できます</p>
+
+    <div id="sharedBanner" class="banner" hidden>パートナーから共有されたルートです。このまま「出発する」を押してください。</div>
+
+    <div class="panel" id="planForm">
+      <div class="field">
+        <span class="label">自宅</span>
+        <div class="row">
+          <span id="homeLabel" class="value muted">未設定</span>
+          <button id="btnHere" class="ghost">現在地を自宅にする</button>
+        </div>
+      </div>
+
+      <div class="field">
+        <span class="label">歩く時間（休憩をのぞく）</span>
+        <div class="seg" id="segTime">
+          <button data-v="30">30分</button><button data-v="45">45分</button><button data-v="60">60分</button><button data-v="90">90分</button>
+        </div>
+      </div>
+
+      <div class="field">
+        <span class="label">寄り道先</span>
+        <div class="seg wrap" id="segStop">
+          <button data-v="cafe">カフェ</button><button data-v="bakery">パン屋</button><button data-v="park">公園</button><button data-v="shrine">神社・お寺</button><button data-v="none">寄らない</button>
+        </div>
+        <div id="candidates" class="candidates"></div>
+      </div>
+
+      <div class="field">
+        <span class="label">お題の間隔</span>
+        <div class="seg" id="segInterval">
+          <button data-v="5">5分ごと</button><button data-v="8">8分ごと</button><button data-v="12">12分ごと</button>
+        </div>
+      </div>
+
+      <label class="check"><input type="checkbox" id="chkTopics"> お題の合間に、会話の話題も出す</label>
+
+      <button id="btnMake" class="primary">ルートを作る</button>
+      <p id="planError" class="error" hidden></p>
+    </div>
+
+    <div class="panel" id="routeSummary" hidden>
+      <div class="summary">
+        <div><span class="big" id="sumDist">-</span><span class="unit">km</span></div>
+        <div><span class="big" id="sumTime">-</span><span class="unit">分</span></div>
+        <div class="stopname" id="sumStop"></div>
+      </div>
+      <button id="btnStart" class="primary">出発する</button>
+      <div class="row gap">
+        <button id="btnShare" class="ghost">パートナーに送る</button>
+        <button id="btnReroll" class="ghost">別の道にする</button>
+        <button id="btnSim" class="ghost">家で試す</button>
+      </div>
+      <p class="hint">出発したらスマホはポケットへ。曲がり角とお題は音声で案内します。イヤホンを使うと聞きやすいです。</p>
+    </div>
+  </section>
+
+  <!-- 散歩中 -->
+  <section id="view-walk" class="view walk" hidden>
+    <div id="simBadge" class="simbadge" hidden>試しモード（8倍速）</div>
+    <div class="next">
+      <div class="arrow" id="nextArrow">↑</div>
+      <div>
+        <div class="nexttext" id="nextText">ルートに沿って進んでください</div>
+        <div class="nextsub" id="nextSub"></div>
+      </div>
+    </div>
+    <div class="stats">
+      <div><span class="label">残り</span><span id="statRemain" class="num">-</span></div>
+      <div><span class="label">経過</span><span id="statTime" class="num">0分</span></div>
+      <div><span class="label">写真</span><span id="statPhotos" class="num">0枚</span></div>
+    </div>
+
+    <div id="restCard" class="card rest" hidden>
+      <div class="cardlabel">休憩中</div>
+      <p id="restText"></p>
+      <button id="btnResume" class="primary">出発する</button>
+      <p class="hint">お店から離れると、自動で案内を再開します</p>
+    </div>
+
+    <div id="missionCard" class="card mission" hidden>
+      <div class="cardlabel">お題</div>
+      <p id="missionText"></p>
+      <div class="row gap">
+        <button id="btnShoot" class="primary amber">撮る</button>
+        <button id="btnSkip" class="ghost">スキップ</button>
+      </div>
+    </div>
+
+    <div id="topicCard" class="card topic" hidden>
+      <div class="cardlabel">話題</div>
+      <p id="topicText"></p>
+    </div>
+
+    <div id="walkMap" class="map small"></div>
+
+    <div id="offRoute" class="banner warn" hidden>
+      ルートから外れているようです
+      <button id="btnReroute" class="ghost">ここから道を引き直す</button>
+    </div>
+
+    <div class="row gap">
+      <button id="btnFree" class="ghost">自由に撮る</button>
+      <button id="btnRepeat" class="ghost">もう一度聞く</button>
+      <button id="btnEnd" class="ghost danger">散歩を終える</button>
+    </div>
+  </section>
+
+  <!-- アルバム -->
+  <section id="view-album" class="view" hidden>
+    <h2>アルバム</h2>
+    <div id="albumList" class="albumlist"></div>
+  </section>
+
+  <section id="view-detail" class="view" hidden>
+    <button id="btnBack" class="ghost">← アルバムに戻る</button>
+    <h2 id="detailTitle"></h2>
+    <p id="detailMeta" class="muted"></p>
+    <div id="detailMap" class="map"></div>
+    <div id="detailPhotos" class="photos"></div>
+  </section>
+</main>
+
+<nav class="tabs" id="tabs">
+  <button data-tab="plan" class="on">散歩</button>
+  <button data-tab="album">アルバム</button>
+</nav>
+
+<input type="file" id="photoInput" accept="image/*" capture="environment" hidden>
+<div id="toast" class="toast" hidden></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="missions.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
