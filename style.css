@@ -466,3 +466,12 @@ input[type="range"] { accent-color: var(--fg); }
 .destsearch .secondary { min-height: 44px; padding: 8px 14px; flex: none; }
 a.primary { text-decoration: none; }
 .pin.dest { background: var(--accent); color: #fff; }
+
+/* 通算距離とバッジの分類 */
+.totalcard { display: flex; flex-direction: column; gap: 6px; border-top: 1px solid var(--fg); padding: 14px 0; }
+.totalkm { font-family: "IBM Plex Mono", monospace; font-size: 34px; font-weight: 500; letter-spacing: -.01em; }
+.facts { list-style: none; margin: 4px 0 0; padding: 0; display: flex; flex-direction: column; }
+.facts li { font-size: 14px; line-height: 1.5; padding: 8px 0; border-top: 1px solid var(--line); }
+.facts li .bar { margin-top: 6px; }
+.badgecat { font-size: 12px; letter-spacing: .06em; color: var(--muted); margin-top: 14px; padding-top: 10px; border-top: 1px solid var(--line); white-space: pre; }
+.fact { margin: 4px 0 0; color: var(--accent); }

@@ -1318,6 +1318,7 @@ function startWalk(sim) {
     id: "w" + Date.now(), startedAt: Date.now(), sim, route, seed: plan.seed, night,
     stopName: plan.chosen && plan.stop !== "none" ? plan.chosen.name : null,
     stopMission: plan.chosen && plan.stop !== "none" ? STOP_TYPES[plan.chosen.type || plan.stop].mission : null,
+    stopType: plan.chosen && plan.stop !== "none" ? plan.chosen.type || plan.stop : null,
     progress: 0, track: [plan.home], pos: plan.home, lastFixAt: Date.now(),
     events: missionPlan(plan.seed, route.total, plan.interval, [route.stopAlong, route.dest && route.dest.back === "round" ? route.dest.along : null], night, themeKey(plan.seed), plan.weather, route.dest && route.dest.back === "oneway"), eventIdx: 0,
     theme: themeKey(plan.seed), weather: plan.weather,
@@ -1713,6 +1714,7 @@ async function finishWalk(early) {
     results: w.results, sim: w.sim, night: !!w.night, theme: w.theme || null, weather: w.weather || null, seed: w.seed,
     split: w.split ? { meetName: w.split.meetName, branch: w.branch } : null,
     dest: w.route.dest ? { name: w.route.dest.name, back: w.route.dest.back } : null,
+    stopType: w.stopType || null, detours: (w.route.detours || []).length,
   };
   // この散歩で新しく取ったバッジと、上がった称号を記録しておく
   try {
@@ -1834,12 +1836,35 @@ function renderBadges(walks) {
   $("#titleBar").style.width = `${Math.min(100, pct)}%`;
   $("#titleNext").textContent = t.next ? `あと${t.next.pts - s.pts}個の気づきで「${t.next.name}」` : "いちばん上の称号です";
   $("#badgeCount").textContent = `${have.size} / ${BADGES.length}`;
-  const grid = $("#badgeGrid");
-  grid.innerHTML = "";
-  BADGES.forEach((b) => {
-    const on = have.has(b.id), el = stamp(b, on);
-    el.querySelector(".bdesc").textContent = on ? b.desc : `${b.desc}（${Math.min(b.get(s), b.need)}/${b.need}）`;
-    grid.appendChild(el);
+  // 分類ごとに見出しをつけて並べる。ひみつのバッジは、取るまで「？」
+  const box = $("#badgeGrid");
+  box.innerHTML = "";
+  const num = (v) => (Number.isInteger(v) ? v : Math.floor(v * 10) / 10);
+  Object.entries(BADGE_CATS).forEach(([cat, label]) => {
+    const list = BADGES.filter((b) => b.cat === cat);
+    const head = document.createElement("div");
+    head.className = "badgecat";
+    head.textContent = `${label}  ${list.filter((b) => have.has(b.id)).length}/${list.length}`;
+    const grid = document.createElement("div");
+    grid.className = "badgegrid";
+    list.forEach((b) => {
+      const on = have.has(b.id), hide = b.secret && !on;
+      const el = stamp(hide ? { mark: "？", name: "ひみつ" } : b, on);
+      el.querySelector(".bdesc").textContent = hide ? "条件は取ってのお楽しみ" : on ? b.desc : `${b.desc}（${num(Math.min(b.get(s), b.need))}/${num(b.need)}）`;
+      grid.appendChild(el);
+    });
+    box.append(head, grid);
+  });
+  // これまでに歩いた距離と、そのたとえ
+  $("#totalCard").hidden = !s.walks;
+  $("#totalKm").textContent = `${fmtKm(s.km * 1000)}km`;
+  $("#totalSub").textContent = `${s.walks}回・${Math.floor(s.totalMin / 60)}時間${s.totalMin % 60}分`;
+  $("#totalFacts").innerHTML = "";
+  distanceFacts(s.km).forEach((f) => {
+    const li = document.createElement("li");
+    li.textContent = f.text;
+    if (f.progress != null) { const bar = mkEl("bar"); bar.appendChild(document.createElement("span")).style.width = `${Math.max(1, Math.min(100, f.progress * 100))}%`; li.appendChild(bar); }
+    $("#totalFacts").appendChild(li);
   });
 }
 
@@ -1904,6 +1929,8 @@ async function openDetail(id) {
   const label = (owner) => (group.length > 1 && window.Cloud ? Cloud.nameOf(owner) : "");
   $("#detailTitle").textContent = `${fmtDate(w.startedAt)}の散歩`;
   $("#detailMeta").textContent = `${fmtTime(w.startedAt)}〜${fmtTime(w.endedAt)} ・ ${fmtKm(w.distance)}km${w.dest ? ` ・ ${w.dest.name}まで${w.dest.back === "oneway" ? "片道" : "往復"}` : ""}${w.stopName ? " ・ " + w.stopName + "に寄り道" : ""}${w.night ? " ・ 夜さんぽ" : ""}`;
+  const fact = w.sim ? "" : walkFact(w.distance, w.seed || w.startedAt);
+  $("#detailFact").textContent = fact; $("#detailFact").hidden = !fact;
   const fresh = (w.newBadges || []).map((bid) => BADGES.find((b) => b.id === bid)).filter(Boolean);
   $("#detailNew").hidden = !fresh.length && !w.newTitle;
   $("#newTitle").hidden = !w.newTitle;
