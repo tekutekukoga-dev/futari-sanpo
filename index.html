@@ -10,7 +10,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+JP:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
 <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
-<link rel="stylesheet" href="style.css?v=25">
+<link rel="stylesheet" href="style.css?v=27">
 </head>
 <body>
 
@@ -78,6 +78,10 @@
       </div>
     </div>
     <div class="item">
+      <label class="itemlabel" for="chkFresh">はじめての道を多めに<br><span class="small">これまでに歩いた道を、なるべく通らないルートにします</span></label>
+      <input type="checkbox" id="chkFresh" class="toggle" switch>
+    </div>
+    <div class="item">
       <label class="itemlabel" for="chkTurn">曲がり角で知らせる<br><span class="small">音・画面の点滅・振動（対応機種のみ）。画面をつけたままになります</span></label>
       <input type="checkbox" id="chkTurn" class="toggle" switch>
     </div>
@@ -110,6 +114,7 @@
       <li id="sumTheme"></li>
       <li id="sumWeather"></li>
       <li id="sumSun"></li>
+      <li id="sumFresh" hidden></li>
       <li id="sumBadge" class="badgehint" hidden></li>
     </ul>
     <button id="btnStart" class="primary">出発する</button>
@@ -192,6 +197,8 @@
     <div class="sheetfoot">
       <div id="thumbs" class="thumbs"></div>
       <span class="muted small" id="statTime"></span>
+      <button id="btnKotoba" class="link">ことば</button>
+      <button id="btnBingo" class="link">ビンゴ</button>
       <button id="btnEnd" class="link danger">終える</button>
     </div>
   </div>
@@ -205,6 +212,19 @@
     <div class="titlerow"><b id="totalKm" class="totalkm"></b><span id="totalSub" class="muted"></span></div>
     <ul id="totalFacts" class="facts"></ul>
     <span class="muted small">動物の距離やカロリーは、よく言われる目安です</span>
+    <div id="reviewBtns" class="actions"></div>
+  </div>
+  <div class="group bingocard">
+    <span class="itemlabel">ことば集め</span>
+    <div id="kotobaAlbum"></div>
+  </div>
+  <div class="group bingocard">
+    <span class="itemlabel" id="bingoMonth">今月のビンゴ</span>
+    <div class="seg wrap bingokind"><button data-v="normal">いつもの</button><button data-v="color">色</button><button data-v="shape">かたち</button><button data-v="number">数字</button><button data-v="retro">昭和</button><button data-v="life">生きもの</button></div>
+    <div id="bingoAlbum"></div>
+    <label class="itemlabel" for="bingoReward">ビンゴしたら、ふたりで</label>
+    <input id="bingoReward" class="field" maxlength="40" placeholder="例：ケーキを食べに行く">
+    <span class="muted small">マスを押すと「見つけた」にできます。散歩中は写真で埋められて、全部埋まるとその月の写真集になります</span>
   </div>
   <div class="group walkedcard" id="walkedCard" hidden>
     <span class="itemlabel">ふたりの散歩地図</span>
@@ -273,6 +293,36 @@
 </div>
 
 <!-- 使い方 -->
+<div id="review" class="overlay review" hidden>
+  <div class="reviewbox">
+    <div class="reviewhead"><h2 id="reviewTitle"></h2><button id="btnReviewClose" class="link">閉じる</button></div>
+    <div id="reviewBody"></div>
+  </div>
+</div>
+<div id="kotobaOverlay" class="overlay" hidden>
+  <div class="guidebox bingobox">
+    <h3>ことば集め</h3>
+    <div id="kotobaWalk"></div>
+    <button id="btnKotobaClose" class="link">閉じる</button>
+  </div>
+</div>
+<div id="cropOverlay" class="overlay" hidden>
+  <div class="guidebox bingobox">
+    <h3>文字のところを押してください</h3>
+    <div class="cropwrap"><img id="cropImg" alt=""><div id="cropFrame" class="cropframe"></div></div>
+    <label class="small muted" for="cropSize">枠の大きさ</label>
+    <input type="range" id="cropSize" min="10" max="100" value="50">
+    <div class="actions"><button id="cropOk" class="primary">これにする</button><button id="cropCancel" class="link">あとで</button></div>
+  </div>
+</div>
+<div id="bingoOverlay" class="overlay" hidden>
+  <div class="guidebox bingobox">
+    <h3>今月のビンゴ</h3>
+    <div class="seg wrap bingokind"><button data-v="normal">いつもの</button><button data-v="color">色</button><button data-v="shape">かたち</button><button data-v="number">数字</button><button data-v="retro">昭和</button><button data-v="life">生きもの</button></div>
+    <div id="bingoWalk"></div>
+    <button id="btnBingoClose" class="link">閉じる</button>
+  </div>
+</div>
 <div id="guide" class="overlay" hidden>
   <div class="guidebox">
     <div id="guidePages"></div>
@@ -289,8 +339,8 @@
 <div id="updateBar" class="updatebar" hidden><span>新しい版があります</span><button id="btnUpdate" class="primary">更新する</button></div>
 
 <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
-<script src="missions.js?v=25"></script>
-<script src="badges.js?v=25"></script>
-<script src="app.js?v=25"></script>
+<script src="missions.js?v=27"></script>
+<script src="badges.js?v=27"></script>
+<script src="app.js?v=27"></script>
 </body>
 </html>

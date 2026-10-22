@@ -478,3 +478,52 @@ a.primary { text-decoration: none; }
 .walkedcard { display: flex; flex-direction: column; gap: 8px; border-top: 1px solid var(--fg); padding: 14px 0; }
 .walkedmap { height: 260px; }
 .badgehint { color: var(--accent); }
+
+/* ビンゴ */
+.bingocard { display: flex; flex-direction: column; gap: 8px; border-top: 1px solid var(--fg); padding: 14px 0; }
+.bingogrid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; }
+.bingocell { aspect-ratio: 1; border: 1px solid var(--line); display: grid; place-items: center; padding: 6px; text-align: center; font-size: 12.5px; line-height: 1.35; background-size: cover; background-position: center; position: relative; color: var(--fg); }
+.bingocell.on { border-color: var(--fg); background-color: var(--fg); color: var(--bg); }
+.bingocell.line { border: 2px solid var(--accent); background-color: var(--accent); color: #fff; }
+.bingocell.photo .bingotext { background: rgb(0 0 0 / .55); color: #fff; padding: 2px 4px; }
+.bingocell.pick { outline: 3px solid var(--accent); outline-offset: -3px; }
+.bingoacts { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px; }
+.bingoacts .secondary { min-height: 40px; padding: 6px 12px; font-size: 14px; }
+.bingopicked { width: 100%; font-weight: 600; }
+.bingostatus { color: var(--accent); margin-top: 6px; }
+.bingobox { width: min(420px, 100%); }
+.bingobox h3 { margin: 0 0 10px; }
+.bingocell.hunt { border-left: 6px solid var(--hunt); }
+.bingocell.hunt.on:not(.photo) { background-color: var(--hunt); border-color: var(--hunt); color: #fff; }
+.bingosave { margin-top: 8px; min-height: 42px; font-size: 14px; }
+.bingobox .bingokind { margin-bottom: 10px; }
+
+/* 一年のふりかえり */
+.overlay.review { place-items: stretch; overflow-y: auto; }
+.reviewbox { background: var(--bg); color: var(--fg); max-width: 560px; width: 100%; margin: 0 auto; padding: 20px 16px 40px; display: flex; flex-direction: column; }
+.reviewhead { display: flex; justify-content: space-between; align-items: baseline; border-bottom: 1px solid var(--fg); padding-bottom: 10px; }
+.reviewhead h2 { margin: 0; font-size: 22px; font-weight: 600; }
+.reviewsec { display: flex; flex-direction: column; gap: 8px; padding: 16px 0; border-bottom: 1px solid var(--line); }
+.reviewnums { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+.reviewnum .v { font-family: "IBM Plex Mono", monospace; font-size: 26px; font-weight: 500; }
+.reviewnum .u { font-size: 12px; color: var(--muted); margin-left: 2px; }
+.monthbars { display: grid; grid-template-columns: repeat(12, 1fr); gap: 4px; height: 110px; align-items: end; }
+.mb { display: flex; flex-direction: column; justify-content: flex-end; height: 100%; gap: 3px; }
+.mbbar { background: var(--accent); min-height: 2px; }
+.mbl { font-size: 10px; color: var(--muted); text-align: center; font-family: "IBM Plex Mono", monospace; }
+.reviewphotos { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; }
+.reviewphotos button { aspect-ratio: 1; background-size: cover; background-position: center; }
+.reviewmemo { font-size: 15px; line-height: 1.6; }
+.diarytext { white-space: pre-wrap; line-height: 1.7; }
+
+/* ことば集め */
+.kotobarow { display: flex; flex-wrap: wrap; gap: 6px; }
+.kotobatile { width: 52px; height: 52px; display: grid; place-items: center; border: 1px dashed var(--fg); font-size: 26px; font-weight: 600; color: var(--muted); cursor: pointer; overflow: hidden; padding: 0; }
+.kotobatile.on { border: 1px solid var(--fg); }
+.kotobacv { width: 100%; height: 100%; display: block; }
+.kotobapick { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.kotobapick .chip { border: 1px solid var(--line); padding: 6px 10px; font-size: 13px; }
+.kotobadone { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 8px; }
+.cropwrap { position: relative; max-height: 55vh; overflow: hidden; }
+.cropwrap img { display: block; max-width: 100%; max-height: 55vh; margin: 0 auto; }
+.cropframe { position: absolute; border: 3px solid var(--accent); box-shadow: 0 0 0 9999px rgb(0 0 0 / .35); pointer-events: none; }

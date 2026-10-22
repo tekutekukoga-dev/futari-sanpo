@@ -120,6 +120,12 @@ const BADGES = [
   b("streak", "weeks52", "年", "一年つづいた", "52週続けて、毎週1回以上散歩する", 52, (s) => s.streakWeeks),
   b("streak", "month8", "密", "よく歩いた月", "ひと月に8回散歩する", 8, (s) => s.maxInMonth),
   b("streak", "day2", "再", "おかわり散歩", "同じ日に2回散歩する", 2, (s) => s.maxInDay),
+  // ビンゴとハント
+  b("streak", "bingo1", "揃", "ビンゴ！", "月替わりのビンゴを1列そろえる", 1, (s) => s.bingoLines),
+  b("streak", "bingo5", "列", "ビンゴ名人", "ビンゴを合計5列そろえる", 5, (s) => s.bingoLines),
+  b("streak", "bingoFull", "九", "写真集の完成", "ビンゴのカードを9マス全部うめる", 1, (s) => s.bingoFulls),
+  b("streak", "kotoba1", "言", "ことば職人", "ことば集めで、ことばを1つ完成させる", 1, (s) => s.kotoba),
+  b("streak", "kotoba5", "文", "町の文筆家", "ことば集めで、ことばを5つ完成させる", 5, (s) => s.kotoba),
   // 特別な日
   b("special", "newyear", "賀", "初さんぽ", "1月1日に散歩する", 1, (s) => s.days.has("0101") ? 1 : 0),
   b("special", "setsubun", "福", "節分さんぽ", "2月3日に散歩する", 1, (s) => s.days.has("0203") ? 1 : 0),
@@ -127,7 +133,7 @@ const BADGES = [
   b("special", "xmas", "聖", "クリスマスさんぽ", "12月24日か25日に散歩する", 1, (s) => s.days.has("1224") || s.days.has("1225") ? 1 : 0),
   b("special", "omisoka", "除", "年越しさんぽ", "12月31日に散歩する", 1, (s) => s.days.has("1231") ? 1 : 0),
   // ひみつ（取るまで条件は内緒）
-  b("secret", "zorome", "揃", "ぞろ目の距離", "歩いた距離が1.11km・2.22kmのようなぞろ目になる", 1, (s) => s.zorome, true),
+  b("secret", "zorome", "双", "ぞろ目の距離", "歩いた距離が1.11km・2.22kmのようなぞろ目になる", 1, (s) => s.zorome, true),
   b("secret", "clock", "時", "ぞろ目の時刻", "11時11分のような、ぞろ目の時刻に出発する", 1, (s) => s.clockZorome, true),
   b("secret", "fri13", "凶", "13日の金曜日", "13日の金曜日に散歩する", 1, (s) => s.fri13, true),
   b("secret", "short", "近", "ちょっとそこまで", "1km未満の散歩を終える", 1, (s) => s.shorts, true),
@@ -204,6 +210,9 @@ function badgeStats(walks) {
   const dayNums = Object.keys(perDay).map(Number);
   s.streakDays = longestRun(dayNums);
   // 週は月曜はじまり（1970/1/1は木曜なので、3日ずらす）
+  const bt = typeof bingoTotals === "function" ? bingoTotals() : { lines: 0, fulls: 0 };
+  s.bingoLines = bt.lines; s.bingoFulls = bt.fulls;
+  try { s.kotoba = (JSON.parse(localStorage.getItem("fs:kotobaDone")) || []).length; } catch { s.kotoba = 0; }
   s.streakWeeks = longestRun(dayNums.map((n) => Math.floor((n + 3) / 7)));
   return s;
 }

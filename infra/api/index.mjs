@@ -9,6 +9,7 @@
 //   PAIR#{pair} / PHOTO#{walk}#{id}#{at}  写真の情報（本体はS3）
 //   PAIR#{pair} / DIARY#{key}        AI散歩日記（key は二人の散歩で共通のルート番号）
 //   PAIR#{pair} / LETTER#{to}#{at}   相手への手紙（相手の次の散歩で開く）
+//   PAIR#{pair} / REVIEW#{year}       AIの一年の散歩日記
 //   PAIR#{pair} / AIM#{key}          AIのお題（二人で同じものを使う。2日で自動削除）
 //   USER#{id}   / PUSH#{hash}        通知の送り先（ブラウザごと）
 //   USER#{id}   / LOC                別行動中の現在地（2時間で自動削除）
@@ -55,6 +56,8 @@ export const handler = async (event) => {
     if (method === "GET" && path === "/letters") return json(200, await openLetters(sub));
     if (method === "POST" && path === "/location") return json(200, await saveLocation(sub, body));
     if (method === "GET" && path === "/location") return json(200, await partnerLocation(sub));
+    if (method === "POST" && path === "/review") return json(200, await writeYearReview(sub, body));
+    if (method === "GET" && path === "/review") return json(200, await readYearReview(sub, event.queryStringParameters?.year));
     if (method === "POST" && path === "/diary") return json(200, await writeDiary(sub, body));
     if (method === "POST" && path === "/missions") return json(200, await aiMissions(sub, body));
     return json(404, { error: "not found" });
@@ -496,6 +499,40 @@ async function weeklyMail(pair) {
 
 
 // Bedrock（Claude）を呼ぶ。AWSで「Anthropicの利用目的」をまだ申請していないときは、わかるエラーにする
+// ---------- 一年の散歩日記 ----------
+// まとめの数字やメモはアプリが作って送ってくる（二人の記録をまとめたもの）
+async function writeYearReview(sub, b) {
+  const pairId = await pairOf(sub);
+  const year = Number(b.year);
+  if (!(year >= 2020 && year <= 2100)) throw fail(400, "年が正しくありません");
+  const summary = String(b.summary || "").slice(0, 4000);
+  if (!summary) throw fail(400, "まとめがありません");
+  const p = await getItem(`PAIR#${pairId}`, "META");
+  const names = await Promise.all((p?.members || []).map(async (id) => (await profile(id))?.name || "あいて"));
+  const res = await converse({
+    system: [{ text: [
+      "あなたは、夫婦の一年間の散歩の記録から、一年をふりかえる短い文章を書く書き手です。",
+      "書き方：やわらかい常体。本文は300〜420字。見出しや箇条書きは使わず、2〜3段落の文章にする。",
+      "守ること：",
+      "- 記録にあることだけを書く。記録にない出来事・気持ち・場所の説明を足さない。",
+      `- 二人の呼び名は「${names.join("」と「")}」。「ふたりで」と書いてよい。`,
+      "- 数字は記録のとおりに書く。季節の移り変わりは、月ごとの距離やメモから読み取れるときだけ書く。",
+      "- 大げさな表現や「〜することができた」のような硬い言い回しは使わない。",
+      "最後に改行して「来年のふたりへ：」で始まる30字以内の一文を添える。",
+    ].join("\n") }],
+    messages: [{ role: "user", content: [{ text: summary }] }],
+    inferenceConfig: { maxTokens: 1200, temperature: 0.7 },
+  });
+  const text = res.output?.message?.content?.map((c) => c.text || "").join("").trim();
+  if (!text) throw fail(502, "日記を書けませんでした。少し待ってからもう一度お試しください");
+  await ddb.send(new PutCommand({ TableName: TABLE, Item: { pk: `PAIR#${pairId}`, sk: `REVIEW#${year}`, text, createdAt: Date.now(), by: sub } }));
+  return { year, text };
+}
+async function readYearReview(sub, year) {
+  const pairId = await pairOf(sub);
+  const item = await getItem(`PAIR#${pairId}`, `REVIEW#${Number(year)}`);
+  return { year: Number(year), text: item?.text || null };
+}
 async function converse(input) {
   try {
     return await bedrock.send(new ConverseCommand({ modelId: process.env.MODEL_ID, ...input }));

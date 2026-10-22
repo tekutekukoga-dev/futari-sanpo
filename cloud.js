@@ -354,6 +354,23 @@ window.Cloud = (() => {
       return r.text;
     } catch (e) { if (!quiet) toast(e.message, true); return null; }
   }
+  // 一年のふりかえりのAI日記。二人で同じものを見る（サーバーに保存）
+  async function renderYear(el, year, summary) {
+    if (!ready()) { el.appendChild(Object.assign(document.createElement("p"), { className: "small muted", textContent: "ふたりのアルバムにログインすると、AIが一年の散歩日記を書きます。" })); return; }
+    const body = document.createElement("div");
+    el.appendChild(body);
+    const show = (text) => {
+      body.innerHTML = text ? `<p class="diarytext"></p><button class="link small">書き直してもらう</button>` : `<p class="small muted">この一年の記録から、AIが短いふりかえりを書きます。</p><div class="actions"><button class="secondary">AIに一年の日記を書いてもらう</button></div>`;
+      if (text) body.querySelector(".diarytext").textContent = text;
+      body.querySelector("button").onclick = async (e) => {
+        e.target.disabled = true; e.target.textContent = "書いています…（30秒ほど）";
+        try { const r = await api("/review", { method: "POST", body: { year, summary } }); show(r.text); }
+        catch (err) { toast(err.message, true); show(text); }
+      };
+    };
+    show(null);
+    try { const r = await api(`/review?year=${year}`); if (r.text) show(r.text); } catch {}
+  }
   function renderDiary(group) {
     const el = document.getElementById("detailDiary");
     if (!el) return;
@@ -437,5 +454,5 @@ window.Cloud = (() => {
     if (ready()) sync().then((ch) => ch && !document.getElementById("view-album").hidden && renderAlbum());
     if (ls.get("pushOn", false) && "serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
   }
-  return { init, sync, renderBox, ready, myId, nameOf, openLetters, event, renderLetter, diary, renderDiary, shareWhileApart, stopSharing, missionsFor, applyMissions };
+  return { init, sync, renderBox, ready, myId, nameOf, openLetters, event, renderLetter, diary, renderDiary, shareWhileApart, stopSharing, missionsFor, applyMissions, renderYear };
 })();

@@ -147,7 +147,8 @@ const plan = {
   turnAlert: store.get("turnAlert", false),
   theme: store.get("theme", "any"),
   split: store.get("split", 0),
-  shape: store.get("shape", "loop"), // loop: ぐるっと一周 / dest: 目的地へ
+  shape: store.get("shape", "loop"),
+  fresh: store.get("fresh", false), // はじめての道を多めに // loop: ぐるっと一周 / dest: 目的地へ
   back: store.get("back", "round"), // round: 往復（帰りは別の道） / oneway: 片道（帰りは乗り物）
   dest: store.get("dest", null),
   destCands: [],
@@ -756,14 +757,16 @@ async function makeDestRoute() {
   if (c) side = ((bearing(home, c) - b + 540) % 360) - 180 > 0 ? -1 : 1;
   const ignore = [home, D, ...(c ? [c] : [])];
   const tries = [side, -side].flatMap((sd) => [0.3, 0.45].map((k) => ({ sd, k })));
+  const cells = plan.fresh ? await myWalkedCells() : null;
   let best = null, err = null;
   for (const { sd, k } of tries) {
     const pts = [...out, dest(mid, b + sd * 90, Math.max(200, d * k)), home];
     let route;
     try { route = shapeRoute(await osrm(pts, true), pts, stopIndex); } catch (e) { err = e; continue; }
-    const over = overlapRatio(route, ignore), score = over * 2 + route.total / (d * 2) * 0.1;
+    const over = overlapRatio(route, ignore), fresh = cells ? freshRatio(route, cells, home) : 1;
+    const score = over * 2 + route.total / (d * 2) * 0.1 + (1 - fresh) * 1.5;
     if (!best || score < best.score) best = { route, score };
-    if (over < 0.04) break;
+    if (over < 0.04 && fresh > 0.8) break;
   }
   if (!best) throw err || new Error("ルートを作れませんでした");
   return attachDest(best.route, di, info);
@@ -995,7 +998,8 @@ async function buildRoute() {
       ]).slice(0, 5);
     } else {
       const θ = r() * 360;
-      shapes = [0, 90, 180, 270, 45].map((turn) => ({
+      // はじめての道を多めにするときは、向きを8通り試す
+      shapes = (plan.fresh ? [0, 90, 180, 270, 45, 135, 225, 315] : [0, 90, 180, 270, 45]).map((turn) => ({
         stopIndex: null,
         // 三角形より丸に近い周回になるよう、経由地を3つ置く
         wps: (f) => [home, dest(home, θ + turn - 25, rad0 * 0.95 * f), dest(home, θ + turn + 35, rad0 * 1.05 * f), dest(home, θ + turn + 95, rad0 * 0.85 * f), home],
@@ -1004,16 +1008,18 @@ async function buildRoute() {
     // 経由地でUターンさせずにルートを作り、「同じ道の往復の少なさ」と「目標の距離への近さ」で点数をつける。
     // 1本目の結果から距離の倍率を学んで、2本目以降に使う
     const ignore = [home, ...(stopAt ? [stopAt] : [])];
+    const cells = plan.fresh ? await myWalkedCells() : null;
     let f = 1, best = null;
     for (let i = 0; i < shapes.length; i++) {
       const sh = shapes[i], pts = sh.wps(f);
       let route;
       try { route = shapeRoute(await osrm(pts, true), pts, sh.stopIndex); } catch (e) { if (i === 0 && !best) throw e; continue; }
       const over = overlapRatio(route, ignore), off = Math.abs(route.total - target) / target;
-      const score = over * 2 + off;
+      const fresh = cells ? freshRatio(route, cells, home) : 1;
+      const score = over * 2 + off + (1 - fresh) * 1.5;
       if (!best || score < best.score) best = { route, score, over, off };
       if (i === 0) f = Math.max(0.2, Math.min(2.5, f * (stopAt ? 1 + (target / route.total - 1) * 1.6 : target / route.total)));
-      if (over < 0.03 && off < 0.12) break;
+      if (over < 0.03 && off < 0.12 && fresh > 0.8) break;
     }
     plan.route = best.route;
     }
@@ -1064,6 +1070,16 @@ function showSummary() {
   $("#sumSun").textContent = night ? `日の入りは${fmtTime(sunset)}。いま出発すると、夜向けのお題も混ざります` : `日の入りは${fmtTime(sunset)}`;
   $("#routeSummary").hidden = false;
   badgeHint(r);
+  freshHint(r);
+}
+// このルートのうち、はじめて歩く道がどれくらいあるか
+async function freshHint(r) {
+  const cells = await myWalkedCells();
+  if (plan.route !== r) return;
+  $("#sumFresh").hidden = !cells.size;
+  if (!cells.size) return;
+  const p = Math.round(freshRatio(r, cells, plan.home) * 10);
+  $("#sumFresh").textContent = p >= 10 ? "ぜんぶ、はじめて歩く道です" : p <= 0 ? "ほとんど、歩いたことのある道です" : `道の約${p}割が、はじめて歩く道です`;
 }
 // このルートを歩けば取れそうな実績と、あと少しで取れる実績を出す。
 // 出発の時刻や歩いた距離しだいで変わるひみつ（ぞろ目）は数えない
@@ -1689,7 +1705,9 @@ function updateWalkUI() {
   const ev = walk.events[walk.eventIdx];
   const arrivedOneway = r.dest && r.dest.back === "oneway" && walk.destArrived;
   $("#idleCard").hidden = walk.inbox.length > 0 || walk.resting || arrivedOneway;
-  $("#idleText").textContent = ev ? `次のお題は ${fmtDist(ev.at - prog)} 先で届きます` : `今日のお題はここまで。${r.dest && !walk.destArrived ? "目的地" : "ゴール"}までの道を楽しんで`;
+  const left = kotobaLeft(kotobaNow());
+  $("#idleText").textContent = (ev ? `次のお題は ${fmtDist(ev.at - prog)} 先で届きます` : `今日のお題はここまで。${r.dest && !walk.destArrived ? "目的地" : "ゴール"}までの道を楽しんで`)
+    + (left.length ? `。ことば集め：あと${left.map((c) => `「${c}」`).join("")}` : "");
 }
 
 // 道を外れたときや、散歩中に見どころへ寄るときに、いまいる場所から引き直す
@@ -1758,6 +1776,7 @@ async function finishWalk(early) {
     toast("散歩の記録を保存できませんでした：" + (e && e.message), true);
   }
   store.del("active");
+  if (!w.sim && record.distance > 300) { const ym = bingoKey(monthKey(new Date(w.startedAt))); if (!bingoState(ym).found[BINGO_FREE]) bingoMark(ym, BINGO_FREE, true); }
   buzz([200, 100, 400]);
   walk = null;
   openDetail(record.id);
@@ -1804,7 +1823,9 @@ async function onPhoto(e) {
   try {
     const blob = await shrink(file);
     const data = await toBuffer(blob);
-    await addPhoto({ walkId: walk.id, data, type: blob.type || "image/jpeg", mission, pos: walk.pos, at: Date.now() });
+    const photoId = await addPhoto({ walkId: walk.id, data, type: blob.type || "image/jpeg", mission, pos: walk.pos, at: Date.now() });
+    if (bingoPhotoFor) { const b = bingoPhotoFor; bingoPhotoFor = null; bingoPick = null; bingoMark(b.ym, b.idx, true, photoId); }
+    if (kotobaFor != null) { const i = kotobaFor; kotobaFor = null; openCrop(photoId, blob, i); }
     walk.photos++;
     saveActive();
     toast("写真を保存しました");
@@ -1914,6 +1935,431 @@ async function photosOfGroup(group) {
   return all.sort((a, b) => a.at - b.at);
 }
 
+// ---------- 月替わりのビンゴ ----------
+// マスは月ごとに決まる（二人のスマホで同じカード）。見つけたマスは、このスマホに保存する。
+// ビンゴしたら、月のはじめに二人で決めた「ごほうび」が解禁になる
+const BINGO_FREE = 4, BINGO_LINES = [[0, 1, 2], [3, 4, 5], [6, 7, 8], [0, 3, 6], [1, 4, 7], [2, 5, 8], [0, 4, 8], [2, 4, 6]];
+const monthKey = (d = new Date()) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+// テーマに沿って探すハント。色・形・数字など、決まった8つを探す（並びは月ごとに変わる）
+const HUNTS = {
+  normal: { label: "いつものビンゴ" },
+  color: { label: "カラーハント", cells: [["赤いもの", "#d8322b"], ["オレンジのもの", "#ef8a1f"], ["黄色いもの", "#f1c40f"], ["緑のもの", "#3a9d4a"], ["青いもの", "#1f4fd8"], ["紫のもの", "#8a4fbf"], ["ピンクのもの", "#ef8db0"], ["茶色いもの", "#8b5a2b"]] },
+  shape: { label: "かたちハント", cells: ["まる", "三角", "四角", "星", "ハート", "うずまき", "六角形", "矢印"] },
+  number: { label: "数字ハント", cells: ["1", "2", "3", "4", "5", "6", "7", "8"].map((n) => `数字の「${n}」`) },
+  retro: { label: "昭和ハント", cells: ["ホーロー看板", "黒電話のマーク", "赤い丸ポスト", "タイル張りの壁", "手書きの値札", "木の電柱", "型板ガラス", "レトロな書体の看板"] },
+  life: { label: "生きものハント", cells: ["ねこ", "犬", "スズメ", "ハト", "チョウ", "アリ", "カタツムリかダンゴムシ", "池や川の魚"] },
+};
+// key は「2026-10」（いつものビンゴ）か「2026-10:color」のようにハントの種類つき
+const huntOf = (key) => key.split(":")[1] || "normal";
+const isColorKey = (key) => huntOf(key) !== "normal";
+function bingoCells(key) {
+  const seed = rng(+key.slice(0, 7).replace("-", "") * 7919), h = HUNTS[huntOf(key)] || HUNTS.normal;
+  const pick = h.cells ? shuffle(h.cells, seed).map((c) => (Array.isArray(c) ? c[0] : c)) : shuffle(BINGO_POOL, seed).slice(0, 8);
+  pick.splice(BINGO_FREE, 0, "ふたりで散歩する");
+  return pick;
+}
+const cellColor = (text) => (HUNTS.color.cells.find(([c]) => c === text) || [])[1] || null;
+const bingoKey = (ym = monthKey()) => { const k = store.get("bingoKind:" + ym, "normal"); return HUNTS[k] && k !== "normal" ? `${ym}:${k}` : ym; };
+// ごほうびは、カードの種類によらず月に1つ
+const bingoState = (key) => ({ found: {}, ...store.get("bingo:" + key, {}), reward: store.get("bingo:" + key.slice(0, 7), {}).reward || "" });
+const bingoSave = (key, st) => {
+  store.set("bingo:" + key, { ...store.get("bingo:" + key, {}), found: st.found });
+  const base = store.get("bingo:" + key.slice(0, 7), { found: {} });
+  store.set("bingo:" + key.slice(0, 7), { ...base, reward: st.reward || "" });
+};
+const bingoLines = (st) => BINGO_LINES.filter((l) => l.every((i) => st.found[i])).length;
+// 実績用：これまでのビンゴの数と、全部埋めた月の数
+function bingoTotals() {
+  let lines = 0, fulls = 0;
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (!k.startsWith("fs:bingo:")) continue;
+      const st = JSON.parse(localStorage.getItem(k));
+      lines += bingoLines(st);
+      if (Object.keys(st.found).length >= 9) fulls++;
+    }
+  } catch {}
+  return { lines, fulls };
+}
+// マスを埋める（取り消す）。新しくビンゴしたら知らせる
+function bingoMark(ym, idx, on, photoId) {
+  const st = bingoState(ym), before = bingoLines(st);
+  if (on) st.found[idx] = { at: Date.now(), photoId: photoId ?? (st.found[idx] && st.found[idx].photoId) ?? null };
+  else delete st.found[idx];
+  bingoSave(ym, st);
+  const after = bingoLines(st);
+  if (after > before) {
+    buzz([100, 60, 100, 60, 300]);
+    const all = Object.keys(st.found).length >= 9;
+    toast(all ? "全部埋まりました！今月のビンゴ完成" : `ビンゴ！${st.reward ? `ごほうび解禁：「${st.reward}」` : ""}`);
+  }
+  renderBingoAll();
+}
+// ビンゴのカードを描く。散歩中は、マスを押すと「見つけた」「撮って埋める」を選べる
+let bingoPick = null, bingoPhotoFor = null;
+async function renderBingo(box, ym) {
+  const cells = bingoCells(ym), st = bingoState(ym), lines = bingoLines(st);
+  box.innerHTML = "";
+  const grid = mkEl("bingogrid");
+  const done = new Set(BINGO_LINES.filter((l) => l.every((i) => st.found[i])).flat());
+  for (let i = 0; i < 9; i++) {
+    const b = document.createElement("button");
+    const f = st.found[i];
+    b.className = "bingocell" + (f ? " on" : "") + (done.has(i) ? " line" : "") + (bingoPick === i ? " pick" : "");
+    b.appendChild(mkEl("bingotext", cells[i]));
+    const col = cellColor(cells[i]);
+    if (col) b.style.setProperty("--hunt", col), b.classList.add("hunt");
+    if (f && f.photoId != null) {
+      idb("photos", "readonly", (s) => s.get(f.photoId)).then((p) => { if (p) { b.style.backgroundImage = `url(${blobUrl(photoBlob(p))})`; b.classList.add("photo"); } }).catch(() => {});
+    }
+    if (i !== BINGO_FREE) b.onclick = () => { bingoPick = bingoPick === i ? null : i; renderBingoAll(); };
+    grid.appendChild(b);
+  }
+  box.appendChild(grid);
+  // 選んだマスの操作
+  if (bingoPick != null && ym.slice(0, 7) === monthKey()) {
+    const bar = mkEl("bingoacts");
+    const f = st.found[bingoPick];
+    bar.appendChild(mkEl("bingopicked", `「${cells[bingoPick]}」`));
+    const add = (label, cls, fn, forPhoto) => {
+      const el = document.createElement(forPhoto ? "label" : "button");
+      el.className = cls; el.textContent = label;
+      if (forPhoto) { el.htmlFor = "photoInput"; el.addEventListener("click", fn); } else el.onclick = fn;
+      bar.appendChild(el);
+    };
+    const idx = bingoPick;
+    if (!f) add("見つけた", "secondary", () => { bingoPick = null; bingoMark(ym, idx, true); });
+    if (walk) add(f ? "撮り直す" : "撮って埋める", "secondary", () => { photoFor = `ビンゴ：${cells[idx]}`; bingoPhotoFor = { ym, idx }; }, true);
+    if (f) add("取り消す", "link", () => { bingoPick = null; bingoMark(ym, idx, false); });
+    box.appendChild(bar);
+  }
+  const left = Math.min(...BINGO_LINES.map((l) => l.filter((i) => !st.found[i]).length));
+  const status = mkEl("bingostatus small");
+  status.textContent = Object.keys(st.found).length >= 9 ? "全部埋まりました。今月の写真集の完成です"
+    : lines ? `ビンゴ！${st.reward ? `ごほうび解禁：「${st.reward}」` : ""}${lines > 1 ? `（${lines}列）` : ""}`
+    : `あと${left}マスでビンゴ`;
+  box.appendChild(status);
+  // 写真が1枚でもあれば、9マスを1枚の画像にまとめられる
+  if (Object.values(st.found).some((f) => f.photoId != null)) {
+    const btn = document.createElement("button");
+    btn.className = "secondary bingosave"; btn.textContent = "写真をまとめて1枚にする";
+    btn.onclick = () => saveCollage(ym);
+    box.appendChild(btn);
+  }
+}
+// 3×3のコラージュ画像を作って、保存・共有する
+async function saveCollage(key) {
+  const cells = bingoCells(key), st = bingoState(key);
+  const S = 360, top = 120, W = S * 3, H = top + S * 3 + 40;
+  const cv = document.createElement("canvas"); cv.width = W; cv.height = H;
+  const g = cv.getContext("2d");
+  g.fillStyle = "#f7f7f5"; g.fillRect(0, 0, W, H);
+  g.fillStyle = "#111"; g.font = "600 44px 'IBM Plex Sans JP', sans-serif"; g.textBaseline = "middle";
+  const [y, m] = key.slice(0, 7).split("-");
+  g.fillText(`${y}年${+m}月の${isColorKey(key) ? HUNTS[huntOf(key)].label : "散歩ビンゴ"}`, 36, 62);
+  g.font = "400 22px 'IBM Plex Mono', monospace"; g.fillStyle = "#666";
+  g.fillText("ふたり散歩", W - 170, 62);
+  for (let i = 0; i < 9; i++) {
+    const x = (i % 3) * S, yy = top + Math.floor(i / 3) * S, f = st.found[i];
+    // 見つけたマスは色（カラーハント）か黒、まだのマスは薄い灰色に、探す色の見本だけ置く
+    g.fillStyle = f ? cellColor(cells[i]) || "#111" : "#e6e6e2";
+    g.fillRect(x, yy, S, S);
+    if (!f && cellColor(cells[i])) { g.fillStyle = cellColor(cells[i]); g.fillRect(x + 14, yy + 14, 36, 36); }
+    let drew = false;
+    if (f && f.photoId != null) {
+      try {
+        const p = await idb("photos", "readonly", (s) => s.get(f.photoId));
+        const img = await createImageBitmap(photoBlob(p));
+        const k = Math.max(S / img.width, S / img.height), w = img.width * k, h = img.height * k;
+        g.save(); g.beginPath(); g.rect(x, yy, S, S); g.clip();
+        g.drawImage(img, x + (S - w) / 2, yy + (S - h) / 2, w, h); g.restore();
+        drew = true;
+      } catch {}
+    }
+    // マスの名前を下に小さく
+    g.fillStyle = drew ? "rgba(0,0,0,.55)" : "rgba(0,0,0,0)";
+    g.fillRect(x, yy + S - 44, S, 44);
+    g.fillStyle = drew || f ? "#fff" : "#888";
+    g.font = "500 22px 'IBM Plex Sans JP', sans-serif";
+    g.fillText(cells[i], x + 14, yy + S - 22, S - 28);
+    g.strokeStyle = "#f7f7f5"; g.lineWidth = 4; g.strokeRect(x, yy, S, S);
+  }
+  const blob = await new Promise((res) => cv.toBlob(res, "image/jpeg", 0.9));
+  const file = new File([blob], `futari-sanpo-${key.replace(":", "-")}.jpg`, { type: "image/jpeg" });
+  try {
+    if (navigator.canShare && navigator.canShare({ files: [file] })) { await navigator.share({ files: [file], title: "ふたり散歩のビンゴ" }); return; }
+  } catch (e) { if (e.name === "AbortError") return; }
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob); a.download = file.name; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+}
+// アルバムと散歩中の両方のカードを描き直す
+function renderBingoAll() {
+  const ym = bingoKey();
+  if (!$("#bingoAlbum").closest("[hidden]")) renderBingo($("#bingoAlbum"), ym);
+  if (!$("#bingoOverlay").hidden) renderBingo($("#bingoWalk"), ym);
+  const st = bingoState(ym);
+  $("#bingoReward").value = st.reward || "";
+  $("#bingoMonth").textContent = `${new Date().getMonth() + 1}月のビンゴ`;
+  $$(".bingokind button").forEach((b) => b.classList.toggle("on", b.dataset.v === huntOf(ym)));
+}
+function openBingo() { bingoPick = null; $("#bingoOverlay").hidden = false; renderBingoAll(); }
+
+// ---------- ことば集め ----------
+// 町の看板や張り紙から1文字ずつ写真に撮って、ことばを完成させる。
+// できあがったら、切り抜いた文字を並べて1枚の画像（脅迫状ふう）にする
+const KOTOBA_IDEAS = ["またあるこう", "ありがとう", "おつかれさま", "いいてんき", "さんぽびより", "ふたりでいこう", "おなかすいた", "だいすき", "のんびりいこう", "たのしかった", "おいしいね", "いつもありがとう"];
+const kotobaNow = () => store.get("kotoba", null);
+const kotobaSet = (k) => store.set("kotoba", k);
+const kotobaChars = (phrase) => [...phrase].filter((c) => c.trim());
+let kotobaFor = null;
+function startKotoba(phrase) {
+  phrase = kotobaChars(String(phrase || "")).join("").slice(0, 10);
+  if (!phrase) return toast("ことばを入れてください", true);
+  kotobaSet({ phrase, tiles: {}, startedAt: Date.now() });
+  renderKotobaAll();
+}
+// まだ集めていない文字
+const kotobaLeft = (k) => (k ? kotobaChars(k.phrase).map((c, i) => (k.tiles[i] ? null : c)).filter(Boolean) : []);
+
+async function tileImage(t) {
+  const p = await idb("photos", "readonly", (s) => s.get(t.photoId));
+  return p ? createImageBitmap(photoBlob(p)) : null;
+}
+// 切り抜いた1文字を、小さなcanvasに描く
+async function drawTile(t, size) {
+  const cv = document.createElement("canvas"); cv.width = cv.height = size;
+  const img = await tileImage(t).catch(() => null);
+  if (!img) return cv;
+  const s = t.size * Math.min(img.width, img.height);
+  cv.getContext("2d").drawImage(img, t.cx * img.width - s / 2, t.cy * img.height - s / 2, s, s, 0, 0, size, size);
+  return cv;
+}
+async function renderKotoba(box) {
+  const k = kotobaNow();
+  box.innerHTML = "";
+  if (!k) {
+    box.appendChild(mkEl("small muted", "集めることばを選んでください。散歩中に、町の看板や張り紙から1文字ずつ撮って集めます"));
+  } else {
+    const row = mkEl("kotobarow");
+    const chars = kotobaChars(k.phrase);
+    for (let i = 0; i < chars.length; i++) {
+      const t = k.tiles[i];
+      const el = document.createElement(walk && !t ? "label" : "button");
+      el.className = "kotobatile" + (t ? " on" : "");
+      if (t) {
+        drawTile(t, 120).then((cv) => { el.textContent = ""; cv.className = "kotobacv"; el.appendChild(cv); });
+        el.onclick = () => { if (confirm(`「${chars[i]}」の写真を撮り直しますか？`)) { delete k.tiles[i]; kotobaSet(k); renderKotobaAll(); } };
+      } else if (walk) {
+        el.htmlFor = "photoInput";
+        el.addEventListener("click", () => { kotobaFor = i; photoFor = `ことば集め：「${chars[i]}」`; bingoPhotoFor = null; });
+      } else el.onclick = () => toast("散歩中に、この文字を撮って集めます");
+      if (!t) el.textContent = chars[i];
+      row.appendChild(el);
+    }
+    box.appendChild(row);
+    const left = kotobaLeft(k);
+    box.appendChild(mkEl("small muted", walk ? `文字を押すとカメラが開きます。あと${left.length}文字` : `あと${left.length}文字。散歩中に、文字を押して撮ります`));
+  }
+  // ことばを選ぶ
+  const pick = mkEl("kotobapick");
+  shuffle(KOTOBA_IDEAS, rng(Math.floor(Date.now() / 864e5))).slice(0, 4).forEach((w) => {
+    const b = document.createElement("button"); b.className = "chip"; b.textContent = w;
+    b.onclick = () => { if (!k || !Object.keys(k.tiles).length || confirm(`「${w}」に変えますか？いま集めている文字は消えます`)) startKotoba(w); };
+    pick.appendChild(b);
+  });
+  const own = document.createElement("button"); own.className = "chip"; own.textContent = "自分で決める";
+  own.onclick = () => { const w = prompt("集めることば（10文字まで）", ""); if (w) startKotoba(w); };
+  pick.appendChild(own);
+  box.appendChild(pick);
+  // できあがったことば
+  const done = store.get("kotobaDone", []);
+  if (done.length) {
+    const list = mkEl("kotobadone");
+    done.slice().reverse().forEach((d) => {
+      const b = document.createElement("button"); b.className = "link"; b.textContent = `「${d.phrase}」の画像`;
+      b.onclick = () => saveKotobaCollage(d);
+      list.appendChild(b);
+    });
+    box.appendChild(list);
+  }
+}
+function renderKotobaAll() {
+  if ($("#kotobaAlbum")) renderKotoba($("#kotobaAlbum"));
+  if (!$("#kotobaOverlay").hidden) renderKotoba($("#kotobaWalk"));
+}
+function openKotoba() { $("#kotobaOverlay").hidden = false; renderKotobaAll(); }
+
+// 撮った写真の中で、文字のところを押して切り抜く
+function openCrop(photoId, blob, idx) {
+  const ov = $("#cropOverlay"), img = $("#cropImg"), frame = $("#cropFrame"), size = $("#cropSize");
+  const url = URL.createObjectURL(blob);
+  let cx = 0.5, cy = 0.5;
+  const place = () => {
+    const r = img.getBoundingClientRect(), s = (+size.value / 100) * Math.min(r.width, r.height);
+    Object.assign(frame.style, { width: `${s}px`, height: `${s}px`, left: `${img.offsetLeft + cx * r.width - s / 2}px`, top: `${img.offsetTop + cy * r.height - s / 2}px` });
+  };
+  img.onload = place;
+  img.src = url;
+  img.onclick = (e) => { const r = img.getBoundingClientRect(); cx = (e.clientX - r.left) / r.width; cy = (e.clientY - r.top) / r.height; place(); };
+  size.oninput = place;
+  $("#cropOk").onclick = () => {
+    const k = kotobaNow();
+    if (k) { k.tiles[idx] = { photoId, cx, cy, size: +size.value / 100 }; kotobaSet(k); }
+    ov.hidden = true; URL.revokeObjectURL(url);
+    kotobaCheckDone();
+    renderKotobaAll();
+  };
+  ov.hidden = false;
+}
+function kotobaCheckDone() {
+  const k = kotobaNow();
+  if (!k || kotobaLeft(k).length) return;
+  const d = { phrase: k.phrase, tiles: k.tiles, at: Date.now() };
+  store.set("kotobaDone", [...store.get("kotobaDone", []), d]);
+  kotobaSet(null);
+  buzz([100, 60, 100, 60, 300]);
+  toast(`「${d.phrase}」が完成しました！`);
+  saveKotobaCollage(d);
+}
+// 切り抜いた文字を、少しずつ傾けて並べる（5文字ごとに改行）
+async function saveKotobaCollage(d) {
+  const chars = kotobaChars(d.phrase), per = Math.min(5, chars.length), rows = Math.ceil(chars.length / per);
+  const T = 220, gap = 26, pad = 60, W = pad * 2 + per * T + (per - 1) * gap, H = pad * 2 + rows * T + (rows - 1) * gap + 70;
+  const cv = document.createElement("canvas"); cv.width = W; cv.height = H;
+  const g = cv.getContext("2d");
+  g.fillStyle = "#f3efe6"; g.fillRect(0, 0, W, H);
+  const r = rng(d.at);
+  for (let i = 0; i < chars.length; i++) {
+    const row = Math.floor(i / per), col = i % per, inRow = Math.min(per, chars.length - row * per);
+    const x = pad + (W - pad * 2 - (inRow * T + (inRow - 1) * gap)) / 2 + col * (T + gap) + T / 2, y = pad + row * (T + gap) + T / 2;
+    const sc = 0.88 + r() * 0.16, ang = (r() - 0.5) * 0.2;
+    const tile = d.tiles[i] ? await drawTile(d.tiles[i], 400) : null;
+    g.save(); g.translate(x, y); g.rotate(ang); g.scale(sc, sc);
+    g.shadowColor = "rgba(0,0,0,.25)"; g.shadowBlur = 10; g.shadowOffsetY = 4;
+    g.fillStyle = "#fff"; g.fillRect(-T / 2 - 8, -T / 2 - 8, T + 16, T + 16);
+    g.shadowColor = "transparent";
+    if (tile) g.drawImage(tile, -T / 2, -T / 2, T, T);
+    else { g.fillStyle = "#111"; g.font = `600 ${T * 0.6}px 'IBM Plex Sans JP', sans-serif`; g.textAlign = "center"; g.textBaseline = "middle"; g.fillText(chars[i], 0, 0); }
+    g.restore();
+  }
+  const dt = new Date(d.at);
+  g.fillStyle = "#555"; g.font = "400 26px 'IBM Plex Mono', monospace"; g.textAlign = "right"; g.textBaseline = "alphabetic";
+  g.fillText(`${dt.getFullYear()}.${dt.getMonth() + 1}.${dt.getDate()}  ふたり散歩`, W - pad, H - 30);
+  const blob = await new Promise((res) => cv.toBlob(res, "image/jpeg", 0.9));
+  const file = new File([blob], `futari-sanpo-${d.phrase}.jpg`, { type: "image/jpeg" });
+  try {
+    if (navigator.canShare && navigator.canShare({ files: [file] })) { await navigator.share({ files: [file], title: d.phrase }); return; }
+  } catch (e) { if (e.name === "AbortError") return; }
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob); a.download = file.name; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+}
+
+// ---------- 一年のふりかえり ----------
+// その年の散歩をまとめて1ページにする。二人で記録した同じ散歩は1回に数える
+function reviewYears(walks) {
+  return [...new Set(walks.filter((w) => !w.sim).map((w) => new Date(w.startedAt).getFullYear()))].sort((a, b) => b - a);
+}
+function renderReviewButtons(walks) {
+  const box = $("#reviewBtns");
+  box.innerHTML = "";
+  reviewYears(walks).slice(0, 3).forEach((y) => {
+    const b = document.createElement("button");
+    b.className = "secondary"; b.textContent = `${y}年のふりかえり`;
+    b.onclick = () => openReview(y);
+    box.appendChild(b);
+  });
+}
+async function openReview(year) {
+  releaseUrls();
+  const all = await allWalks();
+  const groups = groupWalks(all).filter((g) => !g[0].sim && new Date(g[0].startedAt).getFullYear() === year).sort((a, b) => a[0].startedAt - b[0].startedAt);
+  const ws = groups.map((g) => g[0]);
+  const km = ws.reduce((n, w) => n + w.distance, 0) / 1000, min = ws.reduce((n, w) => n + (w.minutes || 0), 0);
+  const roads = uniqueKm(walkedLines(groups.flat()));
+  const months = Array(12).fill(0);
+  ws.forEach((w) => (months[new Date(w.startedAt).getMonth()] += w.distance / 1000));
+  const longest = ws.reduce((a, w) => (!a || w.distance > a.distance ? w : a), null);
+  const count = (xs) => Object.entries(xs.reduce((o, x) => ((o[x] = (o[x] || 0) + 1), o), {})).sort((a, b) => b[1] - a[1]);
+  const stops = count(ws.map((w) => w.stopName).filter(Boolean)).slice(0, 3);
+  const dests = [...new Set(ws.map((w) => w.dest && w.dest.name).filter(Boolean))].slice(0, 5);
+  const themes = count(ws.map((w) => w.theme).filter(Boolean));
+  const results = groups.flat().flatMap((w) => w.results || []).filter((r) => r.outcome === "done");
+  const memos = shuffle([...new Set(results.filter((r) => r.memo).map((r) => r.memo))], rng(year)).slice(0, 6);
+  const badges = [...new Set(all.filter((w) => !w.sim && new Date(w.startedAt).getFullYear() === year).flatMap((w) => w.newBadges || []))].map((id) => BADGES.find((b) => b.id === id)).filter(Boolean);
+  let bingo = 0;
+  for (let m = 1; m <= 12; m++) {
+    const ym = `${year}-${String(m).padStart(2, "0")}`;
+    Object.keys(HUNTS).forEach((h) => { const st = store.get("bingo:" + (h === "normal" ? ym : `${ym}:${h}`), null); if (st && st.found) bingo += bingoLines(st); });
+  }
+  const words = store.get("kotobaDone", []).filter((k) => new Date(k.at).getFullYear() === year).map((k) => k.phrase);
+  // 写真は、1年を通して偏らないように最大9枚えらぶ（お題の写真を優先）
+  const photos = (await Promise.all(groups.map((g) => photosOfGroup(g)))).map((ps) => ps.find((p) => p.mission) || ps[0]).filter(Boolean);
+  const step = Math.max(1, photos.length / 9), picks = [];
+  for (let i = 0; i < photos.length && picks.length < 9; i += step) picks.push(photos[Math.floor(i)]);
+
+  $("#reviewTitle").textContent = `${year}年のふたり散歩`;
+  const body = $("#reviewBody");
+  body.innerHTML = "";
+  const sec = (label) => { const d = mkEl("reviewsec"); d.appendChild(mkEl("itemlabel", label)); body.appendChild(d); return d; };
+  const nums = sec("この一年");
+  const grid = mkEl("reviewnums");
+  [[`${ws.length}`, "回"], [fmtKm(km * 1000), "km"], [`${Math.floor(min / 60)}`, "時間"], [fmtKm(roads * 1000), "kmの道"]].forEach(([v, u]) => { const c = mkEl("reviewnum"); c.append(mkEl("v", v), mkEl("u", u)); grid.appendChild(c); });
+  nums.appendChild(grid);
+  distanceFacts(km).filter((f) => f.progress == null).slice(0, 3).forEach((f) => nums.appendChild(mkEl("small", f.text)));
+  // 月ごとの距離
+  const mon = sec("月ごとの距離");
+  const bars = mkEl("monthbars"), mx = Math.max(...months, 0.1);
+  months.forEach((v, i) => { const c = mkEl("mb"); const bar = mkEl("mbbar"); bar.style.height = `${(v / mx) * 100}%`; c.append(bar, mkEl("mbl", String(i + 1))); c.title = `${i + 1}月 ${v.toFixed(1)}km`; bars.appendChild(c); });
+  mon.appendChild(bars);
+  const top = months.indexOf(Math.max(...months));
+  if (months[top] > 0) mon.appendChild(mkEl("small muted", `いちばん歩いたのは${top + 1}月（${months[top].toFixed(1)}km）`));
+  // できごと
+  const ev = sec("思い出");
+  const ul = document.createElement("ul"); ul.className = "facts";
+  const li = (t) => { const x = document.createElement("li"); x.textContent = t; ul.appendChild(x); };
+  if (longest) li(`いちばん長い散歩：${fmtDate(longest.startedAt)}の${fmtKm(longest.distance)}km`);
+  if (stops.length) li(`よく寄った場所：${stops.map(([n, c]) => `${n}（${c}回）`).join("、")}`);
+  if (dests.length) li(`歩いて行った目的地：${dests.join("、")}`);
+  if (themes.length) li(`いちばん多かったテーマ：${THEMES[themes[0][0]] ? THEMES[themes[0][0]].label : themes[0][0]}`);
+  li(`見つけたこと・話したこと：${results.length}個`);
+  if (bingo) li(`ビンゴ：${bingo}列`);
+  if (words.length) li(`町で集めたことば：${words.map((w) => `「${w}」`).join("")}`);
+  if (badges.length) li(`取った実績：${badges.length}個（${badges.slice(0, 6).map((b) => b.name).join("、")}${badges.length > 6 ? "ほか" : ""}）`);
+  ev.appendChild(ul);
+  if (picks.length) {
+    const ph = sec("この一年の写真");
+    const pg = mkEl("reviewphotos");
+    picks.forEach((p) => { const b = document.createElement("button"); b.style.backgroundImage = `url(${blobUrl(photoBlob(p))})`; b.onclick = () => openViewer(p); pg.appendChild(b); });
+    ph.appendChild(pg);
+  }
+  if (memos.length) {
+    const me = sec("心に残ったメモ");
+    memos.forEach((m) => me.appendChild(mkEl("reviewmemo", `「${m}」`)));
+  }
+  // 夫婦用ページ：AIに一年の日記を書いてもらう
+  if (window.Cloud && Cloud.renderYear) {
+    const ai = sec("一年の散歩日記");
+    const summary = [
+      `${year}年の散歩：${ws.length}回、合計${km.toFixed(1)}km、${Math.floor(min / 60)}時間${min % 60}分`,
+      `月ごとの距離(km)：${months.map((v, i) => `${i + 1}月${v.toFixed(1)}`).join("、")}`,
+      longest ? `いちばん長い散歩：${new Date(longest.startedAt).getMonth() + 1}月の${fmtKm(longest.distance)}km` : "",
+      stops.length ? `よく寄った場所：${stops.map(([n, c]) => `${n}${c}回`).join("、")}` : "",
+      dests.length ? `目的地：${dests.join("、")}` : "",
+      `見つけたこと・話したこと：${results.length}個`,
+      bingo ? `ビンゴ${bingo}列` : "",
+      words.length ? `町で集めたことば：${words.join("、")}` : "",
+      memos.length ? `メモ：${memos.map((m) => `「${m}」`).join(" ")}` : "",
+      ...shuffle(results, rng(year + 1)).slice(0, 12).map((r) => `- ${r.kind === "talk" ? "話した" : "見つけた"}「${r.text}」`),
+    ].filter(Boolean).join("\n");
+    Cloud.renderYear(ai, year, summary);
+  }
+  $("#review").hidden = false;
+  $("#review").scrollTop = 0;
+}
+
 // ---------- ふたりの散歩地図 ----------
 // これまでの散歩の道を1枚の地図に重ねる。何度も通った道ほど濃くなる。
 // 歩いた道の長さは、25m四方のマスで数えて、同じ道を何度通っても1回分にする
@@ -1921,19 +2367,37 @@ let walkedMap = null;
 function walkedLines(walks) {
   return walks.filter((w) => !w.sim).map((w) => (w.track && w.track.length > 5 ? w.track : w.route) || []).filter((c) => c.length > 1);
 }
-function uniqueKm(lines) {
+// 25m四方のマスの番号。経度の縮み具合は、緯度を1度単位に丸めて決める（同じ町なら同じマスになるように）
+const cellOf = (p) => [Math.round(p[0] * 111320 / 25), Math.round(p[1] * 111320 * Math.cos(rad(Math.round(p[0]))) / 25)];
+function walkedCells(lines) {
   const cells = new Set();
   lines.forEach((c) => {
-    const k = Math.cos(rad(c[0][0]));
     for (let i = 1; i < c.length; i++) {
       const n = Math.max(1, Math.ceil(dist(c[i - 1], c[i]) / 10));
-      for (let j = 0; j <= n; j++) {
-        const lat = c[i - 1][0] + (c[i][0] - c[i - 1][0]) * (j / n), lon = c[i - 1][1] + (c[i][1] - c[i - 1][1]) * (j / n);
-        cells.add(`${Math.round(lat * 111320 / 25)},${Math.round(lon * 111320 * k / 25)}`);
-      }
+      for (let j = 0; j <= n; j++) cells.add(cellOf([c[i - 1][0] + (c[i][0] - c[i - 1][0]) * (j / n), c[i - 1][1] + (c[i][1] - c[i - 1][1]) * (j / n)]).join());
     }
   });
-  return (cells.size * 25) / 1000;
+  return cells;
+}
+const uniqueKm = (lines) => (walkedCells(lines).size * 25) / 1000;
+// ルートのうち、まだ歩いたことのない道の割合（0〜1）。GPSのずれを見込んで、となりのマスまで「歩いた」とみなす。
+// スタート地点のまわり100mは、どうしても通るので数えない
+function freshRatio(route, cells, home) {
+  if (!cells || !cells.size) return 1;
+  let n = 0, fresh = 0;
+  for (let a = 0; a < route.total; a += 15) {
+    const p = pointAt(route, a);
+    if (home && dist(p, home) < 100) continue;
+    const [y, x] = cellOf(p);
+    n++;
+    let seen = false;
+    for (let dy = -1; dy <= 1 && !seen; dy++) for (let dx = -1; dx <= 1 && !seen; dx++) seen = cells.has(`${y + dy},${x + dx}`);
+    if (!seen) fresh++;
+  }
+  return n ? fresh / n : 1;
+}
+async function myWalkedCells() {
+  try { return walkedCells(walkedLines(await allWalks())); } catch { return new Set(); }
 }
 async function renderWalkedMap(walks) {
   const lines = walkedLines(walks);
@@ -1958,6 +2422,9 @@ async function renderAlbum() {
   const walks = (await allWalks()).sort((a, b) => b.startedAt - a.startedAt);
   renderBadges(ownWalks(walks));
   renderWalkedMap(walks);
+  renderBingoAll();
+  renderReviewButtons(walks);
+  renderKotobaAll();
   if (window.Cloud) {
     Cloud.renderBox();
     if (!renderAlbum.syncing) {
@@ -2205,6 +2672,8 @@ function init() {
   bindSeg("segMeet", "meet", resetRoute);
   bindSeg("segShape", "shape", () => { applyShapeUI(); resetRoute(); });
   bindSeg("segBack", "back", resetRoute);
+  $("#chkFresh").checked = plan.fresh;
+  $("#chkFresh").onchange = (e) => { plan.fresh = e.target.checked; store.set("fresh", plan.fresh); resetRoute(); };
   $("#destForm").addEventListener("submit", onDestSearch);
   applyShapeUI();
   $("#btnDestEnd").onclick = () => finishWalk();
@@ -2225,7 +2694,16 @@ function init() {
 
   // カメラは<label for>で開く（iPhoneでいちばん確実な開き方）。開く前にどのお題の写真かを覚えておく
   $("#btnShoot").addEventListener("click", () => { photoFor = walk && walk.inbox[0] ? walk.inbox[0].text : null; });
-  $("#btnFree").addEventListener("click", () => { photoFor = null; });
+  $("#btnFree").addEventListener("click", () => { photoFor = null; bingoPhotoFor = null; kotobaFor = null; });
+  $("#btnShoot").addEventListener("click", () => { bingoPhotoFor = null; kotobaFor = null; });
+  $("#btnKotoba").onclick = openKotoba;
+  $("#btnKotobaClose").onclick = () => { $("#kotobaOverlay").hidden = true; };
+  $("#cropCancel").onclick = () => { $("#cropOverlay").hidden = true; };
+  $("#btnBingo").onclick = openBingo;
+  $("#btnReviewClose").onclick = () => { $("#review").hidden = true; };
+  $("#btnBingoClose").onclick = () => { $("#bingoOverlay").hidden = true; bingoPick = null; };
+  $$(".bingokind button").forEach((b) => b.onclick = () => { store.set("bingoKind:" + monthKey(), b.dataset.v); bingoPick = null; renderBingoAll(); });
+  $("#bingoReward").addEventListener("change", (e) => { const ym = bingoKey(), st = bingoState(ym); st.reward = e.target.value.trim().slice(0, 40); bingoSave(ym, st); renderBingoAll(); });
   $("#photoInput").addEventListener("change", onPhoto);
   $("#btnDone").onclick = askMemo;
   $("#btnMemoSave").onclick = () => resolve("done", $("#memoInput").value.trim());
