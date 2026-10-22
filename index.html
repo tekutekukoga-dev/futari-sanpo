@@ -10,7 +10,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+JP:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
 <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
-<link rel="stylesheet" href="style.css?v=40">
+<link rel="stylesheet" href="style.css?v=41">
 </head>
 <body>
 
@@ -212,6 +212,7 @@
     <div class="sheetfoot">
       <div id="thumbs" class="thumbs"></div>
       <span class="muted small" id="statTime"></span>
+      <button id="btnWalkAlbum" class="link">アルバム</button>
       <button id="btnKotoba" class="link">ことば</button>
       <button id="btnBingo" class="link">ビンゴ</button>
       <button id="btnEnd" class="link danger">終える</button>
@@ -337,6 +338,7 @@
     <div id="reviewBody"></div>
   </div>
 </div>
+<div id="walkReturn" class="walkreturn" hidden><span>散歩中です</span><button id="btnWalkReturn" class="primary">散歩にもどる</button></div>
 <div id="kotobaOverlay" class="overlay" hidden>
   <div class="guidebox bingobox">
     <h3>ことば集め</h3>
@@ -352,6 +354,15 @@
     <input id="collMemo" class="field" maxlength="40">
     <p id="collNote" class="small muted"></p>
     <div class="actions"><button id="collSave" class="primary">しまう</button><button id="collCancel" class="link">しまわない</button></div>
+  </div>
+</div>
+<div id="posterOverlay" class="overlay" hidden>
+  <div class="guidebox bingobox">
+    <h3 id="posterTitle"></h3>
+    <p class="small muted">人の顔や車のナンバーを押すと、モザイクがかかります</p>
+    <div class="cropwrap"><img id="posterImg" alt=""><div id="posterMarks"></div></div>
+    <div class="actions"><button id="posterMake" class="primary">ポスターにする</button><button id="posterUndo" class="link">モザイクを1つ戻す</button></div>
+    <div class="actions"><button id="posterPhoto" class="link">写真を見る</button><button id="posterClose" class="link">閉じる</button></div>
   </div>
 </div>
 <div id="kotobaReveal" class="overlay" hidden>
@@ -394,8 +405,8 @@
 <div id="updateBar" class="updatebar" hidden><span>新しい版があります</span><button id="btnUpdate" class="primary">更新する</button></div>
 
 <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
-<script src="missions.js?v=40"></script>
-<script src="badges.js?v=40"></script>
-<script src="app.js?v=40"></script>
+<script src="missions.js?v=41"></script>
+<script src="badges.js?v=41"></script>
+<script src="app.js?v=41"></script>
 </body>
 </html>

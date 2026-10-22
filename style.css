@@ -567,3 +567,18 @@ a.primary { text-decoration: none; }
 .kotobapick .chip.on { background: var(--fg); color: var(--bg); border-color: var(--fg); }
 #collMemo { margin-top: 8px; }
 .cardbtn { margin: 6px 0 4px; min-height: 42px; font-size: 14px; }
+/* 散歩中にアルバムを見ているときの「散歩にもどる」 */
+.walkreturn { position: fixed; left: 0; right: 0; bottom: 0; z-index: 900; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 16px calc(10px + env(safe-area-inset-bottom, 0px)); background: var(--fg); color: var(--bg); }
+.walkreturn .primary { background: #1f4fd8; color: #fff; min-height: 42px; padding: 6px 18px; }
+.sheetfoot { flex-wrap: wrap; row-gap: 4px; }
+/* レア度とキラ */
+.rarebadge { position: absolute; top: 4px; left: 4px; font-size: 11px; font-weight: 700; padding: 1px 6px; color: #fff; background: #777; font-family: "IBM Plex Mono", monospace; }
+.zukanpic { position: relative; }
+.rare-SR { background: #b8860b !important; color: #fff; } .rare-R { background: #6a3fb5 !important; color: #fff; } .rare-U { background: #2e7d5b !important; color: #fff; } .rare-C { background: #777 !important; color: #fff; }
+.zukancounts .chip.rare-SR, .zukancounts .chip.rare-R, .zukancounts .chip.rare-U, .zukancounts .chip.rare-C { border-color: transparent; }
+.chip.kira, .zukanitem.kira .zukanpic { background-image: linear-gradient(120deg, #ffd1dc, #fff6b0, #c6f7ff, #e4cfff); }
+.zukanitem.kira .zukanpic { box-shadow: 0 0 0 3px #f2c94c; }
+.lasting { color: #c62828; }
+/* ポスターのモザイクの印 */
+#posterMarks { position: absolute; inset: 0; pointer-events: none; }
+.blurmark { position: absolute; transform: translate(-50%, -50%); background: repeating-conic-gradient(#888 0 25%, #bbb 0 50%) 0 0 / 10px 10px; opacity: .85; }

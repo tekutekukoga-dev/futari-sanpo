@@ -13,6 +13,7 @@ KINDS.choose = { label: "分かれ道", done: "", shoot: false };
 KINDS.letter = { label: "手紙", done: "読んだ", shoot: false };
 // 記録に残さない、お知らせだけのカード
 KINDS.dest = { label: "目的地", done: "OK", shoot: false };
+KINDS.revisit = { label: "まだいた？", done: "まだいた！", shoot: true };
 KINDS.dice = { label: "サイコロ", done: "OK", shoot: false };
 KINDS.kotoba = { label: "ことば集め", done: "あとで", shoot: true };
 const INFO_KINDS = ["theme", "split", "choose", "letter", "dest", "kotoba", "dice"];

@@ -1380,7 +1380,7 @@ const COLLS = {
   ooc: { title: "何の落とし物？", note: "拾わずに、見つけたまま撮りましょう。財布や鍵など大事なものは、近くの交番へ。落とし物でなくても、場ちがいなものは「なんでここに？」へ", placeholder: "ひとこと（例：フェンスの上に、きちんと置かれていた）", tags: ["手袋・靴下", "帽子", "ぬいぐるみ・おもちゃ", "傘", "靴", "マスク", "アクセサリー", "服", "その他の落とし物", "なんでここに？"] },
 };
 const collAll = (kind) => store.get("coll:" + kind, []);
-let collFor = null, collPending = null;
+let collFor = null, collPending = null, revisitShot = false;
 // 撮ったあとに、種類やひとことを聞いてからしまう
 function openCollSheet(kind, photoId, blob) {
   const c = COLLS[kind];
@@ -1398,41 +1398,177 @@ function openCollSheet(kind, photoId, blob) {
   });
   $("#collSheet").hidden = false;
 }
+// レア度。種類ごとに決めておき、しまうときに20回に1回くらい「キラ」が出る
+const RARITY = {
+  "手袋・靴下": "C", "マスク": "C", "傘": "C", "帽子": "U", "服": "U", "その他の落とし物": "U", "アクセサリー": "R", "靴": "R", "ぬいぐるみ・おもちゃ": "SR", "なんでここに？": "SR",
+  "信号無視": "C", "自転車スマホ": "C", "ポイ捨て": "C", "路上駐車": "C", "放置自転車": "C", "歩きタバコ": "U", "落書き": "U", "逆走自転車": "U", "その他": "U", "犬のフン放置": "R", "不法投棄": "SR",
+};
+const RARE_ORDER = { SR: 0, R: 1, U: 2, C: 3 };
+const RARE_LABEL = { C: "コモン", U: "アンコモン", R: "レア", SR: "スーパーレア" };
+const BOUNTY = { C: 100, U: 300, R: 1000, SR: 5000 };
+const rareOf = (x) => RARITY[x.tag] || "U";
+// 何日も同じ場所にありそうなもの（「まだいた！」の対象）
+const LASTING = new Set(["手袋・靴下", "マスク", "傘", "帽子", "服", "その他の落とし物", "アクセサリー", "靴", "ぬいぐるみ・おもちゃ", "なんでここに？", "放置自転車", "落書き", "不法投棄"]);
 function saveColl() {
   const p = collPending;
   if (!p) return;
   if (!p.tag) return toast(p.kind === "crime" ? "何の犯罪か選んでください（わからなければ「その他」）" : "何の落とし物か選んでください", true);
   const list = collAll(p.kind);
-  list.push({ photoId: p.photoId, tag: p.tag || null, memo: $("#collMemo").value.trim() || null, at: Date.now(), pos: p.pos, walkId: walk ? walk.id : null });
+  const entry = { id: "c" + Date.now(), photoId: p.photoId, tag: p.tag || null, memo: $("#collMemo").value.trim() || null, at: Date.now(), pos: p.pos, walkId: walk ? walk.id : null, kira: Math.random() < 0.05, sightings: [] };
+  list.push(entry);
   store.set("coll:" + p.kind, list);
   $("#collSheet").hidden = true; collPending = null;
-  buzz([60, 40, 60]);
-  toast(p.kind === "crime" ? `犯罪あつめにしまいました（${list.length}件め）` : `落とし物あつめにしまいました（${list.length}件め）`);
+  const rare = rareOf(entry);
+  buzz(rare === "SR" || entry.kira ? [80, 40, 80, 40, 300] : [60, 40, 60]);
+  toast(`${entry.kira ? "キラ！ " : ""}${RARE_LABEL[rare]}（${rare}）！ ${p.kind === "crime" ? "犯罪あつめ" : "落とし物あつめ"}にしまいました（${list.length}件め）`);
 }
-// アルバムのフォルダ
+// 「まだいた！」の記録から、いまの様子をひとことで
+function lastingStatus(x) {
+  const ss = x.sightings || [];
+  if (!ss.length) return "";
+  const last = ss[ss.length - 1], days = Math.floor((last.at - x.at) / 864e5), when = days ? `${days}日目` : "同じ日";
+  return last.still ? `まだいた！（${when}・${ss.filter((s) => s.still).length}回）` : `いなくなった…（${when}）。持ち主のもとへ帰った？`;
+}
+// アルバムのフォルダ。レア度の高い順に並べる
 function renderColl(kind) {
   const box = $(kind === "crime" ? "#crimeBox" : "#oocBox");
   if (!box) return;
   const list = collAll(kind);
   box.innerHTML = "";
   box.appendChild(mkEl("small muted", list.length
-    ? `${list.length}件あつめました`
+    ? `${list.length}件あつめました。押すと写真を見たり、${kind === "crime" ? "手配書" : "迷子ポスター"}を作ったりできます`
     : kind === "crime" ? "散歩中に、カメラボタンの上の「犯罪」で撮ると、ここにたまります。信号無視、自転車スマホ、ポイ捨て…" : "散歩中に「落」ボタンで撮ると、ここにたまります。フェンスにかけられた手袋、片方だけの靴、塀の上のぬいぐるみ…。場ちがいなもの（なんでここに？）もここへ"));
   if (list.length) {
     const counts = mkEl("zukancounts"), cnt = {};
-    list.forEach((x) => (cnt[x.tag] = (cnt[x.tag] || 0) + 1));
-    Object.entries(cnt).sort((a, b) => b[1] - a[1]).forEach(([t, n]) => counts.appendChild(mkEl("chip", `${t} ${n}`)));
+    list.forEach((x) => (cnt[rareOf(x)] = (cnt[rareOf(x)] || 0) + 1));
+    ["SR", "R", "U", "C"].forEach((r) => cnt[r] && counts.appendChild(mkEl("chip rare-" + r, `${r} ${cnt[r]}`)));
+    const kira = list.filter((x) => x.kira).length;
+    if (kira) counts.appendChild(mkEl("chip kira", `キラ ${kira}`));
     box.appendChild(counts);
   }
   const grid = mkEl("zukangrid");
-  list.slice().reverse().forEach((x) => {
+  list.slice().sort((a, b) => RARE_ORDER[rareOf(a)] - RARE_ORDER[rareOf(b)] || b.at - a.at).forEach((x) => {
     const b = document.createElement("button");
-    b.className = "zukanitem";
-    b.append(mkEl("zukanpic"), mkEl("zukanname", x.tag || x.memo || ""), mkEl("zukancat", `${fmtDate(x.at)}${x.memo ? "・" + x.memo : ""}`));
-    idb("photos", "readonly", (s) => s.get(x.photoId)).then((p) => { if (p) { b.querySelector(".zukanpic").style.backgroundImage = `url(${blobUrl(photoBlob(p))})`; b.onclick = () => openViewer(p); } }).catch(() => {});
+    b.className = "zukanitem" + (x.kira ? " kira" : "");
+    const pic = mkEl("zukanpic");
+    pic.appendChild(mkEl("rarebadge rare-" + rareOf(x), (x.kira ? "キラ " : "") + rareOf(x)));
+    b.append(pic, mkEl("zukanname", x.tag || ""), mkEl("zukancat", `${fmtDate(x.at)}${x.memo ? "・" + x.memo : ""}`));
+    const st = lastingStatus(x);
+    if (st) b.appendChild(mkEl("zukancat lasting", st));
+    idb("photos", "readonly", (s) => s.get(x.photoId)).then((p) => { if (p) pic.style.backgroundImage = `url(${blobUrl(photoBlob(p))})`; }).catch(() => {});
+    b.onclick = () => openCollItem(kind, x);
     grid.appendChild(b);
   });
   box.appendChild(grid);
+}
+
+// ---------- まだいた！（落とし物の定点観測） ----------
+// 前に撮った落とし物などのそばを、別の散歩で通ったら「まだいるかな？」と聞く
+function lastingTick(p) {
+  if (!walk || walk.sim) return;
+  walk.lastingAsked = walk.lastingAsked || [];
+  for (const kind of ["ooc", "crime"]) {
+    const list = collAll(kind);
+    const x = list.find((e) => LASTING.has(e.tag) && e.pos && e.walkId !== walk.id && !walk.lastingAsked.includes(e.id)
+      && !(e.sightings || []).some((s) => !s.still) && dist(p, e.pos) < 35);
+    if (!x) continue;
+    walk.lastingAsked.push(x.id);
+    const days = Math.floor((Date.now() - x.at) / 864e5);
+    walk.inbox.unshift({ kind: "revisit", id: "rv-" + x.id, coll: kind, collId: x.id, label: "まだいた？", text: `${days ? `${days}日前` : "今日"}に見つけた「${x.tag}」の場所です。まだいるかな？`, tip: x.memo ? `前のひとこと：${x.memo}` : null, arrivedAt: Date.now() });
+    buzz([80, 60, 80]); renderCard();
+    return;
+  }
+}
+function recordSighting(m, still, photoId) {
+  const list = collAll(m.coll), x = list.find((e) => e.id === m.collId);
+  if (!x) return;
+  (x.sightings = x.sightings || []).push({ at: Date.now(), still, photoId: photoId ?? null });
+  store.set("coll:" + m.coll, list);
+  toast(still ? "まだいた！" : "いなくなっていました。持ち主のもとへ帰ったのかも");
+}
+
+// ---------- 迷子ポスター・手配書 ----------
+// 写真を押してモザイクをかけてから、ポスターにする（人の顔や車のナンバーは隠す）
+let posterJob = null;
+function openCollItem(kind, x) {
+  idb("photos", "readonly", (s) => s.get(x.photoId)).then((p) => {
+    if (!p) return toast("写真が見つかりませんでした", true);
+    posterJob = { kind, x, blob: photoBlob(p), blurs: [] };
+    $("#posterTitle").textContent = kind === "crime" ? "手配書を作る" : "迷子ポスターを作る";
+    $("#posterImg").src = blobUrl(posterJob.blob);
+    $("#posterMarks").innerHTML = "";
+    $("#posterOverlay").hidden = false;
+  });
+}
+function addBlur(e) {
+  const img = $("#posterImg"), r = img.getBoundingClientRect();
+  const fx = (e.clientX - r.left) / r.width, fy = (e.clientY - r.top) / r.height;
+  posterJob.blurs.push([fx, fy]);
+  const m = mkEl("blurmark");
+  Object.assign(m.style, { left: `${img.offsetLeft + fx * r.width}px`, top: `${img.offsetTop + fy * r.height}px`, width: `${Math.min(r.width, r.height) * 0.22}px`, height: `${Math.min(r.width, r.height) * 0.22}px` });
+  $("#posterMarks").appendChild(m);
+}
+// 写真にモザイクをかけて、四角く切り出す
+async function mosaicPhoto(blob, blurs, size) {
+  const img = await createImageBitmap(blob);
+  const cv = document.createElement("canvas"); cv.width = cv.height = size;
+  const g = cv.getContext("2d");
+  const s = Math.max(size / img.width, size / img.height), iw = img.width * s, ih = img.height * s, ox = (size - iw) / 2, oy = (size - ih) / 2;
+  g.drawImage(img, ox, oy, iw, ih);
+  const R = Math.min(iw, ih) * 0.11, cell = Math.max(6, Math.round(size / 40));
+  blurs.forEach(([fx, fy]) => {
+    const cx = ox + fx * iw, cy = oy + fy * ih;
+    for (let y = cy - R; y < cy + R; y += cell) for (let x = cx - R; x < cx + R; x += cell) {
+      const px = g.getImageData(Math.max(0, Math.min(size - 1, x + cell / 2)), Math.max(0, Math.min(size - 1, y + cell / 2)), 1, 1).data;
+      g.fillStyle = `rgb(${px[0]},${px[1]},${px[2]})`; g.fillRect(x, y, cell, cell);
+    }
+  });
+  return cv;
+}
+async function makePoster() {
+  const { kind, x, blob, blurs } = posterJob;
+  const W = 1080, H = 1500, cv = document.createElement("canvas"); cv.width = W; cv.height = H;
+  const g = cv.getContext("2d"), serif = "'Hiragino Mincho ProN', 'Yu Mincho', serif", sans = "'IBM Plex Sans JP', sans-serif";
+  const photo = await mosaicPhoto(blob, blurs, 760);
+  const d = new Date(x.at), when = `${d.getMonth() + 1}月${d.getDate()}日`;
+  g.textAlign = "center";
+  if (kind === "crime") {
+    // 西部劇ふうの手配書
+    g.fillStyle = "#e9d8b4"; g.fillRect(0, 0, W, H);
+    g.strokeStyle = "#5a3e1b"; g.lineWidth = 14; g.strokeRect(40, 40, W - 80, H - 80);
+    g.fillStyle = "#3b2810"; g.font = `900 190px ${serif}`; g.fillText("WANTED", W / 2, 250);
+    g.font = `700 54px ${serif}`; g.fillText("この者を探しています", W / 2, 340);
+    g.filter = "sepia(0.7) contrast(1.1)"; g.drawImage(photo, (W - 760) / 2, 390); g.filter = "none";
+    g.strokeStyle = "#3b2810"; g.lineWidth = 6; g.strokeRect((W - 760) / 2, 390, 760, 760);
+    g.font = `700 64px ${serif}`; g.fillText(`罪状：${x.tag}`, W / 2, 1240);
+    g.font = `900 76px ${serif}`; g.fillText(`懸賞金 ${(BOUNTY[rareOf(x)] * (x.kira ? 10 : 1)).toLocaleString("ja-JP")} ポイント`, W / 2, 1340);
+    g.font = `500 34px ${serif}`; g.fillText(`${when} 目撃${x.memo ? `　「${x.memo}」` : ""}`, W / 2, 1410, W - 160);
+  } else {
+    // 張り紙ふうの迷子ポスター（下に切り取りタブ）
+    g.fillStyle = "#fffef7"; g.fillRect(0, 0, W, H);
+    g.fillStyle = "#c62828"; g.fillRect(0, 0, W, 170);
+    g.fillStyle = "#fff"; g.font = `800 110px ${sans}`; g.fillText("さがしています", W / 2, 130);
+    g.drawImage(photo, (W - 760) / 2, 210);
+    g.fillStyle = "#111"; g.font = `700 60px ${sans}`; g.fillText(`この${x.tag === "なんでここに？" ? "ものの持ち主" : x.tag + "の持ち主"}を`, W / 2, 1050, W - 120);
+    g.fillText("さがしています", W / 2, 1125);
+    g.font = `500 34px ${sans}`; g.fillStyle = "#333";
+    g.fillText(`最後に目撃されたのは ${when}`, W / 2, 1190);
+    const st = lastingStatus(x);
+    g.fillText(st || (x.memo ? `「${x.memo}」` : "見かけた方は、そっとしておいてあげてください"), W / 2, 1240, W - 120);
+    g.strokeStyle = "#999"; g.setLineDash([10, 8]); g.lineWidth = 2;
+    g.beginPath(); g.moveTo(0, 1290); g.lineTo(W, 1290); g.stroke(); g.setLineDash([]);
+    g.font = `500 26px ${sans}`; g.fillStyle = "#555";
+    for (let i = 0; i < 8; i++) {
+      const tx = (W / 8) * i + W / 16;
+      g.save(); g.translate(tx, 1395); g.rotate(-Math.PI / 2); g.fillText("ふたり散歩", 0, 8); g.restore();
+      if (i) { g.beginPath(); g.moveTo((W / 8) * i, 1290); g.lineTo((W / 8) * i, H); g.stroke(); }
+    }
+  }
+  g.textAlign = "left";
+  const out = await new Promise((res) => cv.toBlob(res, "image/jpeg", 0.92));
+  $("#posterOverlay").hidden = true;
+  showCard(out, `futari-sanpo-${kind === "crime" ? "wanted" : "maigo"}-${x.id}.jpg`);
+  $("#revealTitle").textContent = kind === "crime" ? "手配書" : "迷子ポスター";
 }
 
 // ---------- まち図鑑 ----------
@@ -2321,6 +2457,7 @@ function onPosition(p) {
 
   kotobaTick(p);
   diceTick(walk.progress);
+  lastingTick(p);
   // 寄り道先に到着
   if (r.stopAlong != null && !walk.stopArrived && prog >= r.stopAlong - 25) arriveStop();
   // 目的地に到着
@@ -2448,6 +2585,7 @@ function renderCard() {
   $("#btnShoot").hidden = !k.shoot;
   $("#btnDone").textContent = k.done;
   $("#btnNext").hidden = INFO_KINDS.includes(m.kind);
+  $("#btnNext").textContent = m.kind === "revisit" ? "いなかった" : "次へ";
   $("#memoBox").hidden = true;
   // 分かれ道では、2本の道のボタンを出す
   $("#splitBox").hidden = m.kind !== "choose";
@@ -2465,7 +2603,7 @@ function renderCard() {
 function askMemo() {
   const m = walk.inbox[0];
   if (!m) return;
-  if (INFO_KINDS.includes(m.kind) || m.kind === "spot") return resolve("done");
+  if (INFO_KINDS.includes(m.kind) || m.kind === "spot" || m.kind === "revisit") return resolve("done");
   $("#missionActions").hidden = true; $("#memoBox").hidden = false;
   $("#memoInput").value = "";
   $("#memoInput").placeholder = m.kind === "talk" ? "どんな話になった？（なくてもOK）" : m.kind === "photo" ? "どんな1枚になった？（なくてもOK）" : "何を見つけた？（なくてもOK）。キーボードのマイクで声でも入力できます";
@@ -2474,6 +2612,7 @@ function resolve(outcome, memo) {
   const m = walk.inbox.shift();
   if (!m) return;
   if (m.kind === "spot" && outcome === "done") addZukan(m.spot, null);
+  if (m.kind === "revisit") { recordSighting(m, outcome === "done", m.photoId); renderCard(); saveActive(); return; }
   if (INFO_KINDS.includes(m.kind)) { renderCard(); saveActive(); return; }
   walk.results.push({ id: m.id, kind: m.kind, cat: m.cat || null, text: m.text, outcome, memo: memo || null });
   if (outcome === "done") toast(m.kind === "talk" ? "いい時間でしたね" : m.kind === "photo" ? "いい1枚！" : "ナイス観察！");
@@ -2636,6 +2775,7 @@ async function onPhoto(e) {
     if (bingoPhotoFor) { const b = bingoPhotoFor; bingoPhotoFor = null; bingoPick = null; bingoMark(b.ym, b.idx, true, photoId); }
     if (kotobaFor != null) { const i = kotobaFor; kotobaFor = null; openCrop(photoId, blob, i); }
     if (collFor) { const k = collFor; collFor = null; openCollSheet(k, photoId, blob); }
+    else if (walk.inbox[0] && walk.inbox[0].kind === "revisit" && photoFor === null && revisitShot) { revisitShot = false; walk.inbox[0].photoId = photoId; resolve("done"); }
     if (zukanFor) {
       const sp = zukanFor; zukanFor = null;
       addZukan(sp, photoId);
@@ -3624,7 +3764,10 @@ function renderGuide() {
 // ---------- 画面切り替え ----------
 function showView(name) {
   ["plan", "walk", "album", "detail"].forEach((v) => ($("#view-" + v).hidden = v !== name));
-  $("#tabs").hidden = name === "walk";
+  // 散歩中は、下のタブのかわりに「散歩にもどる」を出す（散歩の記録と位置の取得は続いたまま）
+  const walking = !!(walk && !walk.done);
+  $("#tabs").hidden = name === "walk" || walking;
+  $("#walkReturn").hidden = !walking || name === "walk";
   $$("#tabs button").forEach((b) => b.classList.toggle("on", b.dataset.tab === (name === "detail" ? "album" : name)));
   if (name === "plan" && planMap) setTimeout(() => planMap.resize(), 50);
   if (name === "album") renderAlbum();
@@ -3702,25 +3845,33 @@ function init() {
 
   // カメラは<label for>で開く（iPhoneでいちばん確実な開き方）。開く前にどのお題の写真かを覚えておく
   $("#btnShoot").addEventListener("click", () => { photoFor = walk && walk.inbox[0] ? walk.inbox[0].text : null; });
-  $("#btnFree").addEventListener("click", () => { photoFor = null; bingoPhotoFor = null; kotobaFor = null; collFor = null; zukanFor = null; });
+  $("#btnFree").addEventListener("click", () => { photoFor = null; bingoPhotoFor = null; kotobaFor = null; collFor = null; zukanFor = null; revisitShot = false; });
   // 犯罪あつめ・Out of Context の専用カメラ。家で試すときはしまわない
   [["#btnCrime", "crime", "犯罪あつめ"], ["#btnOoc", "ooc", "落とし物あつめ"]].forEach(([id, kind, label]) => $(id).addEventListener("click", (e) => {
     if (walk && walk.sim) { e.preventDefault(); toast("家で試すときは使えません。本番の散歩で使えます"); return; }
     photoFor = label; collFor = kind; bingoPhotoFor = null; kotobaFor = null; zukanFor = null;
   }));
   $("#collSave").onclick = saveColl;
+  $("#posterImg").addEventListener("click", addBlur);
+  $("#posterUndo").onclick = () => { posterJob.blurs.pop(); const m = $("#posterMarks").lastChild; m && m.remove(); };
+  $("#posterMake").onclick = () => makePoster().catch(() => toast("ポスターを作れませんでした", true));
+  $("#posterPhoto").onclick = () => { idb("photos", "readonly", (st) => st.get(posterJob.x.photoId)).then((p) => { $("#posterOverlay").hidden = true; p && openViewer(p); }); };
+  $("#posterClose").onclick = () => { $("#posterOverlay").hidden = true; };
   $("#collCancel").onclick = () => { $("#collSheet").hidden = true; collPending = null; toast("写真は散歩の写真として残っています"); };
   $("#btnShoot").addEventListener("click", () => {
     bingoPhotoFor = null; kotobaFor = null;
     const m = walk && walk.inbox[0], k = kotobaNow();
     if (m && m.kind === "kotoba" && k) { kotobaFor = k.target; photoFor = `ことば集め：「${kotobaTargetChar(k)}」`; }
     zukanFor = m && m.kind === "spot" ? m.spot : null;
+    revisitShot = !!(m && m.kind === "revisit");
   });
   $("#revealClose").onclick = () => { $("#kotobaReveal").hidden = true; };
   $("#btnKotoba").onclick = openKotoba;
   $("#btnKotobaClose").onclick = () => { $("#kotobaOverlay").hidden = true; };
   $("#cropCancel").onclick = () => { $("#cropOverlay").hidden = true; };
   $("#btnBingo").onclick = openBingo;
+  $("#btnWalkAlbum").onclick = () => showView("album");
+  $("#btnWalkReturn").onclick = () => { showView("walk"); setTimeout(() => { walkMap && walkMap.resize(); drawWalkRoute(); renderThumbs(); renderCard(); }, 50); };
   $("#btnReviewClose").onclick = () => { $("#review").hidden = true; };
   $("#btnBingoClose").onclick = () => { $("#bingoOverlay").hidden = true; bingoPick = null; };
   $$(".bingokind button").forEach((b) => b.onclick = () => { store.set("bingoKind:" + monthKey(), b.dataset.v); bingoPick = null; renderBingoAll(); });

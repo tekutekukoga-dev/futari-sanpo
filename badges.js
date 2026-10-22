@@ -140,6 +140,9 @@ const BADGES = [
   b("photo", "crimeKinds5", "法", "六法全書いらず", "5種類のちがう犯罪をあつめる", 5, (s) => s.crimeKinds),
   b("photo", "ooc1", "落", "持ち主はどこへ", "落とし物あつめに1件しまう", 1, (s) => s.ooc),
   b("photo", "ooc10", "遺", "落とし物ハンター", "落とし物あつめに10件しまう", 10, (s) => s.ooc),
+  b("photo", "collSR", "珍", "スーパーレア", "犯罪・落とし物で、スーパーレア（SR）を1つあつめる", 1, (s) => s.collSR),
+  b("photo", "kira", "煌", "キラ", "キラの犯罪・落とし物を1つあつめる", 1, (s) => s.kira),
+  b("photo", "still3", "居", "まだいた！", "同じ落とし物に、3回「まだいた」と言う", 3, (s) => s.stillMax),
   b("photo", "oocGlove", "手", "片手袋研究家", "手袋・靴下の落とし物を5つあつめる", 5, (s) => s.oocGlove),
   // 特別な日
   b("special", "newyear", "賀", "初さんぽ", "1月1日に散歩する", 1, (s) => s.days.has("0101") ? 1 : 0),
@@ -237,7 +240,10 @@ function badgeStats(walks) {
   try {
     const cr = JSON.parse(localStorage.getItem("fs:coll:crime")) || [], oc = JSON.parse(localStorage.getItem("fs:coll:ooc")) || [];
     s.crime = cr.length; s.crimeKinds = new Set(cr.map((x) => x.tag)).size; s.ooc = oc.length; s.oocGlove = oc.filter((x) => x.tag === "手袋・靴下").length;
-  } catch { s.crime = 0; s.crimeKinds = 0; s.ooc = 0; s.oocGlove = 0; }
+    const both = [...cr, ...oc], SRT = ["ぬいぐるみ・おもちゃ", "なんでここに？", "不法投棄"];
+    s.collSR = both.filter((x) => SRT.includes(x.tag)).length; s.kira = both.filter((x) => x.kira).length;
+    s.stillMax = Math.max(0, ...both.map((x) => (x.sightings || []).filter((y) => y.still).length));
+  } catch { s.crime = 0; s.crimeKinds = 0; s.ooc = 0; s.oocGlove = 0; s.collSR = 0; s.kira = 0; s.stillMax = 0; }
   try { s.kotoba = (JSON.parse(localStorage.getItem("fs:kotobaDone")) || []).length; } catch { s.kotoba = 0; }
   s.streakWeeks = longestRun(dayNums.map((n) => Math.floor((n + 3) / 7)));
   return s;
