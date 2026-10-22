@@ -30,5 +30,8 @@ PY
 $AWS s3 sync dist-couple "s3://$BUCKET" --delete --exclude index.html --exclude sw.js --cache-control "public, max-age=86400" --only-show-errors
 $AWS s3 cp dist-couple/index.html "s3://$BUCKET/index.html" --cache-control "no-cache" --content-type "text/html; charset=utf-8" --only-show-errors
 $AWS s3 cp dist-couple/sw.js "s3://$BUCKET/sw.js" --cache-control "no-cache" --content-type "text/javascript; charset=utf-8" --only-show-errors
-$AWS cloudfront create-invalidation --distribution-id "$DIST" --paths "/index.html" "/" "/sw.js" --query Invalidation.Status --output text
+# CloudFront はファイル名の ?v= を無視してためておくので、公開のたびに全部を入れ替える（「/*」は1件として数えられ、月1000件まで無料）
+INV=$($AWS cloudfront create-invalidation --distribution-id "$DIST" --paths "/*" --query Invalidation.Id --output text)
+$AWS cloudfront wait invalidation-completed --distribution-id "$DIST" --id "$INV"
+echo "中継サーバーのファイルを入れ替えました"
 echo "公開しました: $(python3 -c 'import re;t=open("cloud-config.js").read();print(re.search(r"\"site\": \"([^\"]+)\"",t).group(1))')"

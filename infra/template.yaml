@@ -371,8 +371,24 @@ Resources:
           TargetOriginId: site
           ViewerProtocolPolicy: redirect-to-https
           Compress: true
-          # AWSが用意している「CachingOptimized」。ファイル側のCache-Controlに従う
-          CachePolicyId: 658327ea-f89d-4fab-a63d-7e88639e58f6
+          # app.js?v=22 のような ?v= の番号を区別してためる（区別しないと、新しい版を出しても古い中身が配られる）
+          CachePolicyId: !Ref SiteCachePolicy
+  # ファイル側の Cache-Control に従い、?v= の番号ごとに別のファイルとしてためる。
+  # ヘッダーやクッキーは送らない（Host を送ると S3 がファイルを見つけられなくなる）
+  SiteCachePolicy:
+    Type: AWS::CloudFront::CachePolicy
+    Properties:
+      CachePolicyConfig:
+        Name: futari-sanpo-site-versioned
+        MinTTL: 0
+        DefaultTTL: 86400
+        MaxTTL: 31536000
+        ParametersInCacheKeyAndForwardedToOrigin:
+          EnableAcceptEncodingGzip: true
+          EnableAcceptEncodingBrotli: true
+          HeadersConfig: { HeaderBehavior: none }
+          CookiesConfig: { CookieBehavior: none }
+          QueryStringsConfig: { QueryStringBehavior: all }
   SiteBucketPolicy:
     Type: AWS::S3::BucketPolicy
     Properties:
