@@ -371,6 +371,7 @@ window.Cloud = (() => {
     show(null);
     try { const r = await api(`/review?year=${year}`); if (r.text) show(r.text); } catch {}
   }
+  const diaryText = (group) => ls.get("diaries", {})[diaryKey(group)] || "";
   function renderDiary(group) {
     const el = document.getElementById("detailDiary");
     if (!el) return;
@@ -481,5 +482,5 @@ window.Cloud = (() => {
     if (ready()) sync().then((ch) => ch && !document.getElementById("view-album").hidden && renderAlbum());
     if (ls.get("pushOn", false) && "serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
   }
-  return { init, sync, renderBox, ready, myId, nameOf, openLetters, event, renderLetter, diary, renderDiary, shareWhileApart, stopSharing, missionsFor, applyMissions, renderYear, sendPlan, checkPlan, partnerName };
+  return { init, sync, renderBox, ready, myId, nameOf, openLetters, event, renderLetter, diary, renderDiary, shareWhileApart, stopSharing, missionsFor, applyMissions, renderYear, sendPlan, checkPlan, partnerName, diaryText };
 })();

@@ -167,6 +167,7 @@ const plan = {
 };
 let walk = null;
 const isDest = () => plan.shape === "dest";
+const isDice = () => plan.shape === "dice";
 const isSolo = () => plan.party === "solo";
 
 // ---------- 地図 ----------
@@ -604,7 +605,10 @@ async function drawPlan(fit = true) {
     planMarkers.push(htmlMarker(planMap, pointAt(plan.route, sp.startAlong), mkEl("pin fork", "分かれ道"), { anchor: "bottom", offset: [0, -6] }));
     planMarkers.push(htmlMarker(planMap, sp.meetPos, mkEl("pin meet", `合流：${sp.meetName}`), { anchor: "bottom", offset: [0, -6] }));
   } else clearRoute(planMap, "routeB");
-  if (plan.route) {
+  if (plan.route && plan.route.dice) {
+    clearRoute(planMap);
+    if (fit) planMap.jumpTo({ center: ll(plan.home), zoom: 15 });
+  } else if (plan.route) {
     setRoute(planMap, plan.route.coords);
     if (fit) planMap.fitBounds(boundsOf(plan.route.coords), { padding: 36, animate: false });
     drawPois(planMap, plan.route.pois, planMarkers);
@@ -847,7 +851,11 @@ async function pickDestOnMap(p) {
 function applyShapeUI() {
   $("#destBox").hidden = !isDest();
   $("#itemTime").hidden = isDest();
-  $("#itemSplit").hidden = isSolo() || !!MEGURI[plan.meguri];
+  $("#itemSplit").hidden = isSolo() || !!MEGURI[plan.meguri] || isDice();
+  // サイコロ散歩では、めぐり・寄り道は使わない（行き先はサイコロまかせ）
+  $("#itemMeguri").hidden = isDice();
+  $("#itemStop").hidden = isDice();
+  $("#diceNote").hidden = !isDice();
   // 目的地モードでは、合流場所は目的地
   $("#meetBox").hidden = !plan.split || isDest();
   $("#splitDestNote").hidden = !(plan.split && isDest());
@@ -1515,6 +1523,69 @@ function meguriTick(p) {
   buzz([80, 60, 80]); renderCard();
 }
 
+// ---------- サイコロ散歩 ----------
+// 行き先は決めずに、角ごとに「サイコロ」で曲がる向きを決めていく散歩。
+// 実際には、決めた時間で家に戻れるように、ジグザグに歩くルートを先に作っておき、次の角までしか見せない
+async function makeDiceRoute() {
+  const home = plan.home, T = loopMeters();
+  const legs = Math.max(3, Math.min(9, Math.round(T / 550)));
+  let best = null, f = 0.8;
+  for (let k = 0; k < 4; k++) {
+    const r = rng(plan.seed + k * 977);
+    let p = home, b = r() * 360;
+    const step = (T / (legs + 1.5)) * 0.75;
+    const pts = [home];
+    for (let i = 0; i < legs; i++) {
+      // 右か左に60〜120度曲がる。家から離れすぎたら、家の方へ向きを寄せる
+      b += (r() < 0.5 ? -1 : 1) * (60 + r() * 60);
+      if (dist(home, p) > T / 3.2) b = bearing(p, home) + (r() < 0.5 ? -50 : 50);
+      p = dest(p, b, step * (0.7 + r() * 0.6) * f);
+      pts.push(p);
+    }
+    pts.push(home);
+    let route;
+    try { route = shapeRoute(await osrm(pts, true), pts, null); } catch (e) { if (!best && k === 2) throw e; continue; }
+    const score = Math.abs(route.total - T) / T + overlapRatio(route, [home]) * 2 - Math.min(route.turns.length, 30) / 100;
+    if (!best || score < best.score) best = { route, score };
+    // 長すぎ・短すぎを、次の試しで直す
+    f = Math.max(0.3, Math.min(1.8, f * (T / route.total)));
+    if (Math.abs(route.total - T) / T < 0.1 && score < 0.35) break;
+  }
+  if (!best) throw new Error("ルートを作れませんでした。少し待ってからもう一度お試しください");
+  best.route.dice = true;
+  return best.route;
+}
+// 散歩中の地図に出すのは、今いるところから次の角の少し先まで
+function diceVisible(route, prog) {
+  const next = route.turns.find((t) => t.along > prog + 3);
+  const to = next ? next.along + 30 : route.total;
+  return sliceCoords(route, Math.max(0, prog - 150), Math.min(route.total, to));
+}
+// 角の手前に来たら、サイコロの目（曲がる向き）を知らせる
+function diceTick(prog) {
+  const r = walk.route;
+  if (!r.dice) return;
+  walk.diced = walk.diced || [];
+  r.turns.forEach((t, i) => {
+    const ahead = t.along - prog;
+    if (ahead > 0 && ahead < 45 && !walk.diced.includes(i)) {
+      walk.diced.push(i);
+      walk.inbox = walk.inbox.filter((m) => m.kind !== "dice");
+      walk.inbox.unshift({ kind: "dice", id: "dice" + i, text: `サイコロの目は…「${t.dir}」！ この先の角を${t.dir}へ`, arrivedAt: Date.now() });
+      buzz([60, 40, 60, 40, 200]); renderCard(); drawWalkRoute();
+    }
+  });
+  // 残り3割になったら、帰り道に入ったことを知らせる
+  if (!walk.diceHome && prog > r.total * 0.7) {
+    walk.diceHome = true;
+    walk.inbox.push({ kind: "dice", id: "dicehome", text: "サイコロの旅も、そろそろおしまい。ここからは家の方へ向かいます", arrivedAt: Date.now() });
+    renderCard();
+  }
+  // 角を過ぎたら、次の角までの道を地図に出す
+  const next = r.turns.findIndex((t) => t.along > prog + 3);
+  if (next !== walk.diceNext) { walk.diceNext = next; drawWalkRoute(); }
+}
+
 // ---------- 別行動（二手に分かれて合流） ----------
 const BRANCH_B_COLOR = "#111111";
 // ルートのうち、along a〜b の区間だけを取り出す
@@ -1648,7 +1719,9 @@ async function buildRoute() {
   showPlanError("");
   $("#btnMake").disabled = true; $("#btnMake").textContent = "ルートを作っています…";
   try {
-    if (!isDest() && MEGURI[plan.meguri]) {
+    if (isDice()) {
+      plan.route = await makeDiceRoute();
+    } else if (!isDest() && MEGURI[plan.meguri]) {
       plan.route = await makeMeguriRoute();
     } else if (isDest()) {
       if (!plan.dest) throw new Error("目的地を選んでください（名前で探すか、地図をタップ）");
@@ -1714,6 +1787,7 @@ function showSummary() {
       ? `「${r.dest.name}」までの片道です。歩きはじめたら、まず${info.first}へ向かいます。帰りは電車やバスで（着いたら乗りかえを調べるボタンが出ます）`
       : `「${r.dest.name}」まで約${toMin}分。帰りは別の道でスタート地点へ戻ります。歩きはじめたら、まず${info.first}へ向かいます（地図の矢印の向き）`;
   }
+  if (r.dice) $("#sumLoop").textContent = `サイコロ散歩：どこへ行くかは、歩きながらのお楽しみ。角に来るたびにサイコロが曲がる向きを決めて、約${Math.round(r.total / WALK_SPEED / 60)}分で家に戻ってきます`;
   const mg = r.meguri;
   if (mg) $("#sumLoop").textContent += mg.lines.length
     ? `。${MEGURI[mg.kind].label}${mg.name ? `「${mg.name}」` : ""}に沿って、約${fmtKm(mg.meters)}km歩きます（地図の太い${mg.kind === "ankyo" ? "水色" : "オレンジ"}の線）${mg.spots.length ? `。ほかに、お店の多い通りを${mg.spots.length}か所通ります` : ""}`
@@ -1817,7 +1891,7 @@ async function onMake() {
   if (isDest() && !plan.dest) return showPlanError("目的地を選んでください（名前で探すか、地図をタップ）");
   showPlanError("");
   plan.route = null; $("#routeSummary").hidden = true;
-  if (plan.stop === "none") { plan.chosen = null; if (await prepareMeet()) await buildRoute(); else drawPlan(); return; }
+  if (plan.stop === "none" || isDice()) { plan.chosen = null; if (await prepareMeet()) await buildRoute(); else drawPlan(); return; }
   $("#btnMake").disabled = true; $("#btnMake").textContent = plan.stop === "any" ? "寄り道先を探しています…" : `${STOP_TYPES[plan.stop].label}を探しています…`;
   try {
     if (plan.stop === "any") {
@@ -1846,8 +1920,9 @@ async function onMake() {
 function sharePayload() {
   const payload = {
     h: plan.home.map((v) => +v.toFixed(5)), m: plan.minutes, i: plan.interval, s: plan.seed, st: plan.stop, th: plan.theme,
-    w: plan.route && (plan.route.detours || plan.route.dest || plan.route.meguri) ? plan.route.waypoints.map((q) => q.map((v) => +v.toFixed(5))) : undefined,
-    si: plan.route && (plan.route.detours || plan.route.dest || plan.route.meguri) ? plan.route.stopIndex : undefined, dt: plan.route && plan.route.detours,
+    dc: plan.route && plan.route.dice ? 1 : undefined,
+    w: plan.route && (plan.route.detours || plan.route.dest || plan.route.meguri || plan.route.dice) ? plan.route.waypoints.map((q) => q.map((v) => +v.toFixed(5))) : undefined,
+    si: plan.route && (plan.route.detours || plan.route.dest || plan.route.meguri || plan.route.dice) ? plan.route.stopIndex : undefined, dt: plan.route && plan.route.detours,
     // めぐり：暗渠の線（間引いたもの）と、めぐる場所。受け取った人にも同じ案内が届くように
     mg: plan.route && plan.route.meguri ? (({ kind, name, lines, spots, meters }) => ({ k: kind, n: name, m: meters,
       l: lines.map((c) => c.filter((_, i) => i % 2 === 0 || i === c.length - 1).map((q) => q.map((v) => +v.toFixed(5)))),
@@ -1896,7 +1971,7 @@ async function loadShared() {
       if (p.mg) route.meguri = { kind: p.mg.k, name: p.mg.n, meters: p.mg.m || 0, lines: p.mg.l || [], spots: (p.mg.s || []).map((x) => ({ id: x.i, name: x.n, label: x.b, pos: x.p })) };
       return route;
     };
-    Object.assign(plan, { home: p.h, minutes: p.m, interval: p.i, seed: p.s, stop: p.st, theme: p.th || "any", shared: true, shape: p.ds ? "dest" : "loop", party: "duo" });
+    Object.assign(plan, { home: p.h, minutes: p.m, interval: p.i, seed: p.s, stop: p.st, theme: p.th || "any", shared: true, shape: p.ds ? "dest" : p.dc ? "dice" : "loop", party: "duo" });
     plan.chosen = p.c ? { id: p.c.id, name: p.c.n, pos: p.c.p, type: p.c.t || p.st, d: dist(p.h, p.c.p) } : null;
     plan.candidates = plan.chosen ? [plan.chosen] : [];
     $("#sharedBanner").hidden = false;
@@ -1917,7 +1992,8 @@ async function loadShared() {
       showSummary(); await drawPlan(); loadPois(plan.route);
     } else if (p.w) {
       // 寄り道を足したルートは、経由地をそのまま使って同じ道にする
-      plan.route = meguriOf(shapeRoute(await osrm(p.w, !!p.mg), p.w, p.si ?? null));
+      plan.route = meguriOf(shapeRoute(await osrm(p.w, !!(p.mg || p.dc)), p.w, p.si ?? null));
+      if (p.dc) plan.route.dice = true;
       if (p.dt) plan.route.detours = p.dt;
       showSummary(); await drawPlan(); loadPois(plan.route);
     } else await buildRoute();
@@ -2137,7 +2213,7 @@ function drawWalkRoute() {
     if (!walk.branch) setRoute(walkMap, sp.branchB, "routeB", BRANCH_B_COLOR);
     else setRoute(walkMap, walk.branch === "B" ? sp.branchA : sp.branchB, "routeB", "#9aa1a6", true);
   }
-  setRoute(walkMap, walk.route.coords);
+  setRoute(walkMap, walk.route.dice ? diceVisible(walk.route, walk.progress) : walk.route.coords);
   walkMarkers.forEach((mk) => mk.remove()); walkMarkers = [];
   drawPois(walkMap, walk.route.pois, walkMarkers);
   drawMeguri(walkMap, walk.route, walkMarkers);
@@ -2244,6 +2320,7 @@ function onPosition(p) {
   }
 
   kotobaTick(p);
+  diceTick(walk.progress);
   // 寄り道先に到着
   if (r.stopAlong != null && !walk.stopArrived && prog >= r.stopAlong - 25) arriveStop();
   // 目的地に到着
@@ -2411,6 +2488,10 @@ function updateWalkUI() {
   const next = r.turns.find((t) => t.along > prog + 3);
   if (walk.resting) {
     $("#nextArrow").textContent = "…"; $("#nextText").textContent = "休憩中"; $("#nextSub").textContent = walk.stopName || "";
+  } else if (next && r.dice && next.along - prog > 45) {
+    $("#nextArrow").textContent = "?";
+    $("#nextText").textContent = `${fmtDist(next.along - prog)}先の角で、サイコロ`;
+    $("#nextSub").textContent = "どっちに曲がるかは、角の手前でわかります";
   } else if (next) {
     $("#nextArrow").textContent = next.arrow;
     $("#nextText").textContent = `${fmtDist(next.along - prog)}先 ${next.dir}`;
@@ -2454,7 +2535,7 @@ async function reroute(via) {
     const step = remaining.length > 1 ? remaining[1].at - remaining[0].at : 0;
     remaining.forEach((e, i) => (e.at = Math.min(nr.total * 0.9, Math.max(50, shift) + step * i)));
     walk.events = remaining; walk.eventIdx = 0;
-    nr.pois = r.pois; nr.letterSpots = r.letterSpots;
+    nr.pois = r.pois; nr.letterSpots = r.letterSpots; nr.dice = r.dice;
     if (r.dest) {
       const di = !walk.destArrived && r.dest.idx >= legIdx + 1 ? r.dest.idx - legIdx + viaPts.length : null;
       nr.dest = { ...r.dest, idx: di, along: di != null ? nr.legEnds[di - 1] : null };
@@ -2487,7 +2568,7 @@ async function finishWalk(early) {
     results: w.results, sim: w.sim, night: !!w.night, theme: w.theme || null, weather: w.weather || null, seed: w.seed,
     split: w.split ? { meetName: w.split.meetName, branch: w.branch } : null,
     dest: w.route.dest ? { name: w.route.dest.name, back: w.route.dest.back } : null,
-    stopType: w.stopType || null, detours: (w.route.detours || []).length, solo: !!w.solo,
+    stopType: w.stopType || null, detours: (w.route.detours || []).length, solo: !!w.solo, dice: !!w.route.dice,
     meguri: w.route.meguri ? { kind: w.route.meguri.kind, name: w.route.meguri.name || null, visited: (w.meguriVisited || []).length, ankyo: !!w.ankyoIn } : null,
   };
   // この散歩で新しく取ったバッジと、上がった称号を記録しておく
@@ -3056,6 +3137,12 @@ async function revealKotoba(d, first) {
   $("#revealTitle").textContent = `「${d.phrase}」ができました！`;
   $("#revealSave").onclick = () => shareImage(blob, `futari-sanpo-${d.phrase}.jpg`, d.phrase);
 }
+function showCard(blob, name) {
+  $("#revealTitle").textContent = "散歩カード";
+  $("#revealImg").src = blobUrl(blob); $("#revealImg").hidden = false;
+  $("#revealSave").onclick = () => shareImage(blob, name, "ふたり散歩");
+  $("#kotobaReveal").hidden = false;
+}
 async function shareImage(blob, name, title) {
   const file = new File([blob], name, { type: "image/jpeg" });
   try {
@@ -3196,6 +3283,79 @@ async function openReview(year) {
   $("#review").scrollTop = 0;
 }
 
+// ---------- 散歩カード ----------
+// 1回の散歩を、1枚の画像（縦長 4:5）にまとめる。道のりの形・数字・たとえ・写真3枚・ひとこと
+async function makeWalkCard(w, group, ps) {
+  const W = 1080, H = 1350, P = 64, cv = document.createElement("canvas");
+  cv.width = W; cv.height = H;
+  const g = cv.getContext("2d");
+  const sans = "'IBM Plex Sans JP', sans-serif", mono = "'IBM Plex Mono', monospace";
+  g.fillStyle = "#f7f7f5"; g.fillRect(0, 0, W, H);
+  g.fillStyle = "#111"; g.textBaseline = "alphabetic";
+  // 見出し
+  const d = new Date(w.startedAt);
+  g.font = `500 30px ${mono}`;
+  g.fillText(`${d.getFullYear()}.${d.getMonth() + 1}.${d.getDate()}`, P, P + 30);
+  g.font = `600 30px ${sans}`; g.textAlign = "right";
+  g.fillText(group.length > 1 ? "ふたり散歩" : "散歩", W - P, P + 30);
+  g.textAlign = "left";
+  g.fillRect(P, P + 52, W - P * 2, 3);
+  // 道のりの形（地図の線だけを描く）
+  const line = (w.track && w.track.length > 5 ? w.track : w.route) || [];
+  const box = { x: P, y: P + 90, w: W - P * 2, h: 470 };
+  if (line.length > 1) {
+    const k = Math.cos(rad(line[0][0]));
+    const xs = line.map((p) => p[1] * k), ys = line.map((p) => p[0]);
+    const minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys);
+    const sc = Math.min((box.w - 80) / (maxX - minX || 1e-6), (box.h - 80) / (maxY - minY || 1e-6));
+    const ox = box.x + (box.w - (maxX - minX) * sc) / 2, oy = box.y + (box.h - (maxY - minY) * sc) / 2;
+    const at = (p) => [ox + (p[1] * k - minX) * sc, oy + (maxY - p[0]) * sc];
+    g.strokeStyle = "#1f4fd8"; g.lineWidth = 10; g.lineCap = "round"; g.lineJoin = "round";
+    g.beginPath(); line.forEach((p, i) => { const [x, y] = at(p); i ? g.lineTo(x, y) : g.moveTo(x, y); }); g.stroke();
+    const [sx, sy] = at(line[0]);
+    g.fillStyle = "#111"; g.beginPath(); g.arc(sx, sy, 14, 0, Math.PI * 2); g.fill();
+    g.fillStyle = "#fff"; g.beginPath(); g.arc(sx, sy, 6, 0, Math.PI * 2); g.fill();
+  }
+  // 数字
+  g.fillStyle = "#111";
+  const nums = [[fmtKm(w.distance), "km"], [String(w.minutes), "分"], [String(ps.length), "枚"]];
+  const done = group.reduce((n, x) => n + (x.results || []).filter((r) => r.outcome === "done").length, 0);
+  nums.push([String(done), "気づき"]);
+  const cw = (W - P * 2) / nums.length, ny = box.y + box.h + 90;
+  nums.forEach(([v, u], i) => {
+    g.font = `500 64px ${mono}`; g.fillText(v, P + i * cw, ny);
+    const vw = g.measureText(v).width;
+    g.font = `500 26px ${sans}`; g.fillStyle = "#666"; g.fillText(u, P + i * cw + vw + 8, ny); g.fillStyle = "#111";
+  });
+  // たとえ（距離）
+  g.font = `400 28px ${sans}`; g.fillStyle = "#1f4fd8";
+  g.fillText(distFact(w.distance), P, ny + 56, W - P * 2);
+  // 写真3枚（お題の写真を優先）
+  const pick = [...ps.filter((p) => p.mission), ...ps.filter((p) => !p.mission)].slice(0, 3);
+  const ph = (W - P * 2 - 24 * 2) / 3, py = ny + 96;
+  for (let i = 0; i < 3; i++) {
+    const x = P + i * (ph + 24);
+    g.fillStyle = "#e6e6e2"; g.fillRect(x, py, ph, ph);
+    if (!pick[i]) continue;
+    try {
+      const img = await createImageBitmap(photoBlob(pick[i]));
+      const s = Math.max(ph / img.width, ph / img.height), iw = img.width * s, ih = img.height * s;
+      g.save(); g.beginPath(); g.rect(x, py, ph, ph); g.clip(); g.drawImage(img, x + (ph - iw) / 2, py + (ph - ih) / 2, iw, ih); g.restore();
+    } catch {}
+  }
+  // ひとこと（AI日記の「今日のひとこと」、なければメモ）
+  const diary = window.Cloud && Cloud.diaryText ? Cloud.diaryText(group) : "";
+  const hito = (diary.match(/今日のひとこと[:：]\s*(.+)/) || [])[1];
+  const memo = group.flatMap((x) => x.results || []).map((r) => r.memo).find(Boolean);
+  const say = hito || (memo ? `「${memo}」` : w.stopName ? `${w.stopName}に寄り道` : "");
+  g.fillStyle = "#111"; g.font = `500 32px ${sans}`;
+  if (say) g.fillText(say, P, py + ph + 70, W - P * 2);
+  g.font = `400 22px ${mono}`; g.fillStyle = "#999"; g.textAlign = "right";
+  g.fillText("futari sanpo", W - P, H - P + 10);
+  g.textAlign = "left";
+  return new Promise((res) => cv.toBlob(res, "image/jpeg", 0.92));
+}
+
 // ---------- ふたりの散歩地図 ----------
 // これまでの散歩の道を1枚の地図に重ねる。何度も通った道ほど濃くなる。
 // 歩いた道の長さは、25m四方のマスで数えて、同じ道を何度通っても1回分にする
@@ -3303,6 +3463,13 @@ async function openDetail(id) {
   $("#detailTitle").textContent = `${fmtDate(w.startedAt)}の散歩`;
   $("#detailMeta").textContent = `${fmtTime(w.startedAt)}〜${fmtTime(w.endedAt)} ・ ${fmtKm(w.distance)}km${w.dest ? ` ・ ${w.dest.name}まで${w.dest.back === "oneway" ? "片道" : "往復"}` : ""}${w.stopName ? " ・ " + w.stopName + "に寄り道" : ""}${w.night ? " ・ 夜さんぽ" : ""}`;
   const fact = w.sim ? "" : walkFact(w.distance);
+  $("#btnCard").hidden = !!w.sim;
+  $("#btnCard").onclick = async () => {
+    $("#btnCard").disabled = true;
+    try { const blob = await makeWalkCard(w, group, ps); showCard(blob, `futari-sanpo-${new Date(w.startedAt).toISOString().slice(0, 10)}.jpg`); }
+    catch (e) { toast("カードを作れませんでした", true); }
+    finally { $("#btnCard").disabled = false; }
+  };
   $("#detailFact").textContent = fact; $("#detailFact").hidden = !fact;
   const fresh = (w.newBadges || []).map((bid) => BADGES.find((b) => b.id === bid)).filter(Boolean);
   $("#detailNew").hidden = !fresh.length && !w.newTitle;

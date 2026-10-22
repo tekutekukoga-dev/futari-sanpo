@@ -566,3 +566,4 @@ a.primary { text-decoration: none; }
 .fab.mini.ooc { bottom: 94px; background: #6a3fb5; font-size: 16px; }
 .kotobapick .chip.on { background: var(--fg); color: var(--bg); border-color: var(--fg); }
 #collMemo { margin-top: 8px; }
+.cardbtn { margin: 6px 0 4px; min-height: 42px; font-size: 14px; }
