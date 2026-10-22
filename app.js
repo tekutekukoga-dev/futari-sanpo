@@ -673,27 +673,48 @@ function chooseCandidate(c) { plan.chosen = c; renderCandidates(); buildRoute();
 // ---------- 目的地 ----------
 const midOf = (a, b) => [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
 // 名前で探す。家の近くを優先し、15km以内に絞る
+// 名前で探す。2つの検索サービスに同時に聞いて、スタート地点に近い順に並べる。
+// チェーン店は同じ名前の店がたくさんあるので、名前ではなく場所で重なりを除く
+const DEST_RANGE = 15000;
+// よく使う呼び方を、お店の正式な名前に直す
+const NICKNAMES = { "スタバ": "スターバックス", "マック": "マクドナルド", "マクド": "マクドナルド", "ケンタ": "ケンタッキー", "セブン": "セブン-イレブン", "ファミマ": "ファミリーマート", "サイゼ": "サイゼリヤ", "ミスド": "ミスタードーナツ", "モス": "モスバーガー", "無印": "無印良品", "ドンキ": "ドン・キホーテ", "マツキヨ": "マツモトキヨシ", "コンビニ": "コンビニエンスストア" };
+const NOISE = /駐車場|駐輪場|自転車|バイク|パーキング|出口|入口|口$/;
 async function searchDest(q) {
+  q = q.normalize("NFKC").trim();
+  q = NICKNAMES[q] || q;
   const [lat, lon] = plan.home;
-  let list = [];
-  try {
-    const d = await getJson(`${PHOTON_SEARCH}?q=${encodeURIComponent(q)}&lat=${lat.toFixed(4)}&lon=${lon.toFixed(4)}&limit=20`);
-    list = d.features.map((f) => ({
-      id: f.properties.osm_type + f.properties.osm_id, name: f.properties.name || [f.properties.street, f.properties.housenumber].filter(Boolean).join(" "),
-      pos: [f.geometry.coordinates[1], f.geometry.coordinates[0]], area: f.properties.district || f.properties.city || "",
-    }));
-  } catch {}
+  const a = dest(plan.home, 315, DEST_RANGE * Math.SQRT2), b = dest(plan.home, 135, DEST_RANGE * Math.SQRT2);
+  // Photon：あいまいな言葉にも強い。スタート地点のまわり15kmの四角の中だけで探す
+  const photon = getJson(`${PHOTON_SEARCH}?q=${encodeURIComponent(q)}&lat=${lat.toFixed(4)}&lon=${lon.toFixed(4)}&bbox=${a[1].toFixed(4)},${b[0].toFixed(4)},${b[1].toFixed(4)},${a[0].toFixed(4)}&limit=50`)
+    .then((d) => d.features.map((f) => {
+      const pr = f.properties;
+      return { id: pr.osm_type + pr.osm_id, name: pr.name || [pr.street, pr.housenumber].filter(Boolean).join(" "), pos: [f.geometry.coordinates[1], f.geometry.coordinates[0]], area: pr.district || pr.locality || pr.city || "" };
+    })).catch(() => []);
+  // Overpass：チェーン店の全部の店舗を名前とブランドで探す（近い10km）
+  const re = q.replace(/[.*+?^${}()|[\]\\"]/g, ""); // 記号は検索の邪魔になるので外す
+  const oq = `[out:json][timeout:8];(nwr["name"~"${re}",i](around:8000,${lat},${lon});nwr["brand"~"${re}",i](around:8000,${lat},${lon}););out tags center 80;`;
+  const overpassReq = getJson(OVERPASS, { method: "POST", body: "data=" + encodeURIComponent(oq), headers: { "Content-Type": "application/x-www-form-urlencoded" } })
+    .then((d) => d.elements.map((e) => ({
+      id: e.type[0].toUpperCase() + e.id, name: [e.tags.name || e.tags.brand, e.tags.branch && !String(e.tags.name || "").includes(e.tags.branch) ? e.tags.branch : ""].filter(Boolean).join(" "),
+      pos: e.lat != null ? [e.lat, e.lon] : [e.center.lat, e.center.lon], area: e.tags["addr:quarter"] || e.tags["addr:neighbourhood"] || e.tags["addr:suburb"] || "",
+    }))).catch(() => []);
+  // Overpass は混んでいると遅いので、Photon の答えから4秒までしか待たない
+  const photonList = await photon;
+  const overpass = await Promise.race([overpassReq, new Promise((r) => setTimeout(() => r([]), photonList.length ? 4000 : 8000))]);
+  let list = [...overpass, ...photonList];
   if (!list.length) {
-    const a = dest(plan.home, 315, 15000 * Math.SQRT2), b = dest(plan.home, 135, 15000 * Math.SQRT2);
-    const data = await getJson(`${NOMINATIM}?q=${encodeURIComponent(q)}&viewbox=${a[1]},${a[0]},${b[1]},${b[0]}&bounded=1&format=jsonv2&limit=20`)
+    const data = await getJson(`${NOMINATIM}?q=${encodeURIComponent(q)}&viewbox=${a[1]},${a[0]},${b[1]},${b[0]}&bounded=1&format=jsonv2&limit=40`)
       .catch(() => { throw new Error("場所を探せませんでした。電波の良いところで、もう一度お試しください"); });
     list = data.map((e) => ({ id: e.osm_type[0].toUpperCase() + e.osm_id, name: e.name, pos: [+e.lat, +e.lon], area: "" }));
   }
-  const seen = new Set();
-  return list.filter((c) => c.name && !seen.has(c.name) && seen.add(c.name))
-    .map((c) => ({ ...c, d: dist(plan.home, c.pos) }))
-    .filter((c) => c.d > 150 && c.d < 15000)
-    .slice(0, 6);
+  // 名前がぴったり合うもの → 名前がその言葉ではじまるもの → そのほか、の順。同じ順位なら近い順。駐車場などは後ろに
+  const tier = (c) => (NOISE.test(c.name) && !NOISE.test(q) ? 3 : c.name === q || c.name.split(" ")[0] === q ? 0 : c.name.startsWith(q) ? 1 : 2);
+  const out = [];
+  list.filter((c) => c.name).map((c) => ({ ...c, d: dist(plan.home, c.pos), t: tier(c) }))
+    .filter((c) => c.d > 150 && c.d < DEST_RANGE)
+    .sort((x, y) => x.t - y.t || x.d - y.d)
+    .forEach((c) => { if (!out.some((o) => dist(o.pos, c.pos) < 40 || (o.name === c.name && dist(o.pos, c.pos) < 300))) out.push(c); });
+  return out.slice(0, 8);
 }
 async function onDestSearch(e) {
   e.preventDefault();
@@ -712,9 +733,12 @@ function renderDestCands() {
   const box = $("#destCands");
   box.innerHTML = "";
   const list = [...plan.destCands];
-  if (plan.dest && !list.some((c) => c.name === plan.dest.name)) list.unshift({ ...plan.dest, d: plan.home ? dist(plan.home, plan.dest.pos) : 0 });
+  const same = (a, b) => a && b && dist(a.pos, b.pos) < 40;
+  if (plan.dest && !list.some((c) => same(c, plan.dest))) list.unshift({ ...plan.dest, d: plan.home ? dist(plan.home, plan.dest.pos) : 0 });
+  // 同じ名前の店が並ぶときは、地域の名前を添えて見分けられるようにする
+  const dup = (c) => list.filter((x) => x.name === c.name).length > 1;
   list.forEach((c) => {
-    box.appendChild(candidateRow(c, plan.dest && plan.dest.name === c.name, "", () => chooseDest(c)));
+    box.appendChild(candidateRow(c, same(plan.dest, c), dup(c) && plan.home ? `${dir8(bearing(plan.home, c.pos))}へ` : "", () => chooseDest(c)));
   });
 }
 function chooseDest(c) {
