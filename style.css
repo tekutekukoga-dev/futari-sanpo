@@ -579,6 +579,3 @@ a.primary { text-decoration: none; }
 .chip.kira, .zukanitem.kira .zukanpic { background-image: linear-gradient(120deg, #ffd1dc, #fff6b0, #c6f7ff, #e4cfff); }
 .zukanitem.kira .zukanpic { box-shadow: 0 0 0 3px #f2c94c; }
 .lasting { color: #c62828; }
-/* ポスターのモザイクの印 */
-#posterMarks { position: absolute; inset: 0; pointer-events: none; }
-.blurmark { position: absolute; transform: translate(-50%, -50%); background: repeating-conic-gradient(#888 0 25%, #bbb 0 50%) 0 0 / 10px 10px; opacity: .85; }

@@ -1405,7 +1405,6 @@ const RARITY = {
 };
 const RARE_ORDER = { SR: 0, R: 1, U: 2, C: 3 };
 const RARE_LABEL = { C: "コモン", U: "アンコモン", R: "レア", SR: "スーパーレア" };
-const BOUNTY = { C: 100, U: 300, R: 1000, SR: 5000 };
 const rareOf = (x) => RARITY[x.tag] || "U";
 // 何日も同じ場所にありそうなもの（「まだいた！」の対象）
 const LASTING = new Set(["手袋・靴下", "マスク", "傘", "帽子", "服", "その他の落とし物", "アクセサリー", "靴", "ぬいぐるみ・おもちゃ", "なんでここに？", "放置自転車", "落書き", "不法投棄"]);
@@ -1436,7 +1435,7 @@ function renderColl(kind) {
   const list = collAll(kind);
   box.innerHTML = "";
   box.appendChild(mkEl("small muted", list.length
-    ? `${list.length}件あつめました。押すと写真を見たり、${kind === "crime" ? "手配書" : "迷子ポスター"}を作ったりできます`
+    ? `${list.length}件あつめました`
     : kind === "crime" ? "散歩中に、カメラボタンの上の「犯罪」で撮ると、ここにたまります。信号無視、自転車スマホ、ポイ捨て…" : "散歩中に「落」ボタンで撮ると、ここにたまります。フェンスにかけられた手袋、片方だけの靴、塀の上のぬいぐるみ…。場ちがいなもの（なんでここに？）もここへ"));
   if (list.length) {
     const counts = mkEl("zukancounts"), cnt = {};
@@ -1455,8 +1454,7 @@ function renderColl(kind) {
     b.append(pic, mkEl("zukanname", x.tag || ""), mkEl("zukancat", `${fmtDate(x.at)}${x.memo ? "・" + x.memo : ""}`));
     const st = lastingStatus(x);
     if (st) b.appendChild(mkEl("zukancat lasting", st));
-    idb("photos", "readonly", (s) => s.get(x.photoId)).then((p) => { if (p) pic.style.backgroundImage = `url(${blobUrl(photoBlob(p))})`; }).catch(() => {});
-    b.onclick = () => openCollItem(kind, x);
+    idb("photos", "readonly", (s) => s.get(x.photoId)).then((p) => { if (p) { pic.style.backgroundImage = `url(${blobUrl(photoBlob(p))})`; b.onclick = () => openViewer(p); } }).catch(() => {});
     grid.appendChild(b);
   });
   box.appendChild(grid);
@@ -1485,90 +1483,6 @@ function recordSighting(m, still, photoId) {
   (x.sightings = x.sightings || []).push({ at: Date.now(), still, photoId: photoId ?? null });
   store.set("coll:" + m.coll, list);
   toast(still ? "まだいた！" : "いなくなっていました。持ち主のもとへ帰ったのかも");
-}
-
-// ---------- 迷子ポスター・手配書 ----------
-// 写真を押してモザイクをかけてから、ポスターにする（人の顔や車のナンバーは隠す）
-let posterJob = null;
-function openCollItem(kind, x) {
-  idb("photos", "readonly", (s) => s.get(x.photoId)).then((p) => {
-    if (!p) return toast("写真が見つかりませんでした", true);
-    posterJob = { kind, x, blob: photoBlob(p), blurs: [] };
-    $("#posterTitle").textContent = kind === "crime" ? "手配書を作る" : "迷子ポスターを作る";
-    $("#posterImg").src = blobUrl(posterJob.blob);
-    $("#posterMarks").innerHTML = "";
-    $("#posterOverlay").hidden = false;
-  });
-}
-function addBlur(e) {
-  const img = $("#posterImg"), r = img.getBoundingClientRect();
-  const fx = (e.clientX - r.left) / r.width, fy = (e.clientY - r.top) / r.height;
-  posterJob.blurs.push([fx, fy]);
-  const m = mkEl("blurmark");
-  Object.assign(m.style, { left: `${img.offsetLeft + fx * r.width}px`, top: `${img.offsetTop + fy * r.height}px`, width: `${Math.min(r.width, r.height) * 0.22}px`, height: `${Math.min(r.width, r.height) * 0.22}px` });
-  $("#posterMarks").appendChild(m);
-}
-// 写真にモザイクをかけて、四角く切り出す
-async function mosaicPhoto(blob, blurs, size) {
-  const img = await createImageBitmap(blob);
-  const cv = document.createElement("canvas"); cv.width = cv.height = size;
-  const g = cv.getContext("2d");
-  const s = Math.max(size / img.width, size / img.height), iw = img.width * s, ih = img.height * s, ox = (size - iw) / 2, oy = (size - ih) / 2;
-  g.drawImage(img, ox, oy, iw, ih);
-  const R = Math.min(iw, ih) * 0.11, cell = Math.max(6, Math.round(size / 40));
-  blurs.forEach(([fx, fy]) => {
-    const cx = ox + fx * iw, cy = oy + fy * ih;
-    for (let y = cy - R; y < cy + R; y += cell) for (let x = cx - R; x < cx + R; x += cell) {
-      const px = g.getImageData(Math.max(0, Math.min(size - 1, x + cell / 2)), Math.max(0, Math.min(size - 1, y + cell / 2)), 1, 1).data;
-      g.fillStyle = `rgb(${px[0]},${px[1]},${px[2]})`; g.fillRect(x, y, cell, cell);
-    }
-  });
-  return cv;
-}
-async function makePoster() {
-  const { kind, x, blob, blurs } = posterJob;
-  const W = 1080, H = 1500, cv = document.createElement("canvas"); cv.width = W; cv.height = H;
-  const g = cv.getContext("2d"), serif = "'Hiragino Mincho ProN', 'Yu Mincho', serif", sans = "'IBM Plex Sans JP', sans-serif";
-  const photo = await mosaicPhoto(blob, blurs, 760);
-  const d = new Date(x.at), when = `${d.getMonth() + 1}月${d.getDate()}日`;
-  g.textAlign = "center";
-  if (kind === "crime") {
-    // 西部劇ふうの手配書
-    g.fillStyle = "#e9d8b4"; g.fillRect(0, 0, W, H);
-    g.strokeStyle = "#5a3e1b"; g.lineWidth = 14; g.strokeRect(40, 40, W - 80, H - 80);
-    g.fillStyle = "#3b2810"; g.font = `900 190px ${serif}`; g.fillText("WANTED", W / 2, 250);
-    g.font = `700 54px ${serif}`; g.fillText("この者を探しています", W / 2, 340);
-    g.filter = "sepia(0.7) contrast(1.1)"; g.drawImage(photo, (W - 760) / 2, 390); g.filter = "none";
-    g.strokeStyle = "#3b2810"; g.lineWidth = 6; g.strokeRect((W - 760) / 2, 390, 760, 760);
-    g.font = `700 64px ${serif}`; g.fillText(`罪状：${x.tag}`, W / 2, 1240);
-    g.font = `900 76px ${serif}`; g.fillText(`懸賞金 ${(BOUNTY[rareOf(x)] * (x.kira ? 10 : 1)).toLocaleString("ja-JP")} ポイント`, W / 2, 1340);
-    g.font = `500 34px ${serif}`; g.fillText(`${when} 目撃${x.memo ? `　「${x.memo}」` : ""}`, W / 2, 1410, W - 160);
-  } else {
-    // 張り紙ふうの迷子ポスター（下に切り取りタブ）
-    g.fillStyle = "#fffef7"; g.fillRect(0, 0, W, H);
-    g.fillStyle = "#c62828"; g.fillRect(0, 0, W, 170);
-    g.fillStyle = "#fff"; g.font = `800 110px ${sans}`; g.fillText("さがしています", W / 2, 130);
-    g.drawImage(photo, (W - 760) / 2, 210);
-    g.fillStyle = "#111"; g.font = `700 60px ${sans}`; g.fillText(`この${x.tag === "なんでここに？" ? "ものの持ち主" : x.tag + "の持ち主"}を`, W / 2, 1050, W - 120);
-    g.fillText("さがしています", W / 2, 1125);
-    g.font = `500 34px ${sans}`; g.fillStyle = "#333";
-    g.fillText(`最後に目撃されたのは ${when}`, W / 2, 1190);
-    const st = lastingStatus(x);
-    g.fillText(st || (x.memo ? `「${x.memo}」` : "見かけた方は、そっとしておいてあげてください"), W / 2, 1240, W - 120);
-    g.strokeStyle = "#999"; g.setLineDash([10, 8]); g.lineWidth = 2;
-    g.beginPath(); g.moveTo(0, 1290); g.lineTo(W, 1290); g.stroke(); g.setLineDash([]);
-    g.font = `500 26px ${sans}`; g.fillStyle = "#555";
-    for (let i = 0; i < 8; i++) {
-      const tx = (W / 8) * i + W / 16;
-      g.save(); g.translate(tx, 1395); g.rotate(-Math.PI / 2); g.fillText("ふたり散歩", 0, 8); g.restore();
-      if (i) { g.beginPath(); g.moveTo((W / 8) * i, 1290); g.lineTo((W / 8) * i, H); g.stroke(); }
-    }
-  }
-  g.textAlign = "left";
-  const out = await new Promise((res) => cv.toBlob(res, "image/jpeg", 0.92));
-  $("#posterOverlay").hidden = true;
-  showCard(out, `futari-sanpo-${kind === "crime" ? "wanted" : "maigo"}-${x.id}.jpg`);
-  $("#revealTitle").textContent = kind === "crime" ? "手配書" : "迷子ポスター";
 }
 
 // ---------- まち図鑑 ----------
@@ -3852,11 +3766,6 @@ function init() {
     photoFor = label; collFor = kind; bingoPhotoFor = null; kotobaFor = null; zukanFor = null;
   }));
   $("#collSave").onclick = saveColl;
-  $("#posterImg").addEventListener("click", addBlur);
-  $("#posterUndo").onclick = () => { posterJob.blurs.pop(); const m = $("#posterMarks").lastChild; m && m.remove(); };
-  $("#posterMake").onclick = () => makePoster().catch(() => toast("ポスターを作れませんでした", true));
-  $("#posterPhoto").onclick = () => { idb("photos", "readonly", (st) => st.get(posterJob.x.photoId)).then((p) => { $("#posterOverlay").hidden = true; p && openViewer(p); }); };
-  $("#posterClose").onclick = () => { $("#posterOverlay").hidden = true; };
   $("#collCancel").onclick = () => { $("#collSheet").hidden = true; collPending = null; toast("写真は散歩の写真として残っています"); };
   $("#btnShoot").addEventListener("click", () => {
     bingoPhotoFor = null; kotobaFor = null;
