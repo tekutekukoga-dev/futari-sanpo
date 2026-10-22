@@ -25,7 +25,7 @@ const km = (s) => s.km;
 const BADGES = [
   // 歩いた距離（合計）
   b("dist", "km1", "歩", "最初の1km", "合計1km歩く", 1, km),
-  b("dist", "fuji", "富", "富士山の高さ", "合計3.776km歩く（富士山の高さ）", 3.776, km),
+  b("dist", "kokyo", "皇", "皇居一周", "合計5km歩く（皇居のまわり1周）", 5, km),
   b("dist", "km10", "十", "10km達成", "合計10km歩く", 10, km),
   b("dist", "yamanote", "環", "山手線一周", "合計34.5km歩く（山手線一周）", 34.5, km),
   b("dist", "marathon", "走", "フルマラソン", "合計42.195km歩く", 42.195, km),
@@ -133,6 +133,13 @@ const BADGES = [
   b("stop", "kissa10", "盞", "純喫茶さんぽ", "まち図鑑に喫茶店を10軒入れる", 10, (s) => s.zukanCat.kissa || 0),
   b("stop", "park10", "遊", "公園はしご名人", "まち図鑑に公園を10か所入れる", 10, (s) => s.zukanCat.park || 0),
   b("stop", "tree5", "樹", "木を見る人", "まち図鑑に名木・巨樹を5本入れる", 5, (s) => s.zukanCat.tree || 0),
+  // 犯罪あつめ・Out of Context
+  b("photo", "crime1", "罪", "通報はしません", "犯罪あつめに1件しまう", 1, (s) => s.crime),
+  b("photo", "crime10", "警", "町の見張り番", "犯罪あつめに10件しまう", 10, (s) => s.crime),
+  b("photo", "crimeKinds5", "法", "六法全書いらず", "5種類のちがう犯罪をあつめる", 5, (s) => s.crimeKinds),
+  b("photo", "ooc1", "落", "持ち主はどこへ", "落とし物あつめに1件しまう", 1, (s) => s.ooc),
+  b("photo", "ooc10", "遺", "落とし物ハンター", "落とし物あつめに10件しまう", 10, (s) => s.ooc),
+  b("photo", "oocGlove", "手", "片手袋研究家", "手袋・靴下の落とし物を5つあつめる", 5, (s) => s.oocGlove),
   // 特別な日
   b("special", "newyear", "賀", "初さんぽ", "1月1日に散歩する", 1, (s) => s.days.has("0101") ? 1 : 0),
   b("special", "setsubun", "福", "節分さんぽ", "2月3日に散歩する", 1, (s) => s.days.has("0203") ? 1 : 0),
@@ -226,6 +233,10 @@ function badgeStats(walks) {
     z.forEach((x) => (s.zukanCat[x.cat] = (s.zukanCat[x.cat] || 0) + 1));
     s.goshiki = typeof GOSHIKI !== "undefined" ? GOSHIKI.filter((c) => z.some((x) => x.cat === "fudo" && c.re.test(x.name))).length : 0;
   } catch { s.zukan = 0; s.zukanCat = {}; s.goshiki = 0; }
+  try {
+    const cr = JSON.parse(localStorage.getItem("fs:coll:crime")) || [], oc = JSON.parse(localStorage.getItem("fs:coll:ooc")) || [];
+    s.crime = cr.length; s.crimeKinds = new Set(cr.map((x) => x.tag)).size; s.ooc = oc.length; s.oocGlove = oc.filter((x) => x.tag === "手袋・靴下").length;
+  } catch { s.crime = 0; s.crimeKinds = 0; s.ooc = 0; s.oocGlove = 0; }
   try { s.kotoba = (JSON.parse(localStorage.getItem("fs:kotobaDone")) || []).length; } catch { s.kotoba = 0; }
   s.streakWeeks = longestRun(dayNums.map((n) => Math.floor((n + 3) / 7)));
   return s;
@@ -242,78 +253,76 @@ function earnedBadges(stats) {
 }
 
 // ---------- 通算距離のたとえ ----------
-// 長さのたとえ（km）。合計がどれくらいかを、身近なものや遠い場所で表す
+// 「次の目標」に使う、遠くの場所（km）。高さではなく、歩いて行く道のりで比べる
 const LANDMARKS = [
-  { km: 0.634, name: "東京スカイツリーの高さ", unit: "本分" },
-  { km: 3.776, name: "富士山の高さ", unit: "個分" },
-  { km: 34.5, name: "山手線一周", unit: "周分" },
-  { km: 42.195, name: "フルマラソン", unit: "回分" },
-  { km: 492, name: "東海道五十三次（日本橋〜京都）", unit: "回分" },
-  { km: 3000, name: "日本列島（北海道〜沖縄）", unit: "回分" },
-  { km: 40075, name: "地球一周", unit: "周分" },
-  { km: 384400, name: "月まで", unit: "回分" },
+  { km: 5, name: "皇居一周" },
+  { km: 29, name: "東京駅〜横浜駅" },
+  { km: 34.5, name: "山手線一周" },
+  { km: 42.195, name: "フルマラソン" },
+  { km: 100, name: "東京〜富士山のふもと" },
+  { km: 492, name: "東海道五十三次（日本橋〜京都）" },
+  { km: 3000, name: "日本列島（北海道〜沖縄）" },
+  { km: 40075, name: "地球一周" },
+  { km: 384400, name: "月まで" },
 ];
-// 小さなたとえ。1つ分の長さ（m）と、数え方
-const SMALL_THINGS = [
-  { m: 0.1, name: "ハンバーガー（直径10cm）を並べると", unit: "個分" },
-  { m: 0.2, name: "スマホを縦に並べると", unit: "台分" },
-  { m: 25, name: "25mプール", unit: "往復分", per: 50 },
-  { m: 333, name: "東京タワーの高さ", unit: "本分" },
-  { m: 400, name: "16両の新幹線", unit: "編成分" },
+// 距離のたとえ。m：1つ分の長さ（メートル）。数がちょうどよく収まるものから、毎回1つ選ぶ
+const DIST_THINGS = [
+  { m: 0.02, say: (n) => `1円玉（直径2cm）を並べると${n}枚分` },
+  { m: 0.1, say: (n) => `ハンバーガー（直径10cm）を並べると${n}個分` },
+  { m: 0.13, say: (n) => `うまい棒（約13cm）を並べると${n}本分` },
+  { m: 0.175, say: (n) => `鉛筆（約17.5cm）を並べると${n}本分` },
+  { m: 0.9, say: (n) => `横断歩道の白線（1本＋すき間で約90cm）${n}本分` },
+  { m: 20, say: (n) => `電車の車両（1両 約20m）${n}両分` },
+  { m: 30, say: (n) => `トイレットペーパー（ダブル 約30m）${n}ロール分` },
+  { m: 50, say: (n) => `25mプール ${n}往復分` },
+  { m: 400, say: (n) => `16両編成の新幹線 ${n}本分` },
+  { m: 40, say: (n) => `ナマケモノが1日に動く距離の${n}日分` },
+  { m: 90, say: (n) => `カタツムリが1日に進む距離の${n}日分` },
+  { m: 5000, say: (n) => `ハムスターが一晩で走る距離の${n}晩分` },
+  { m: 15000, say: (n) => `ゾウが1日に歩く距離の${n}日分` },
+  { m: 40000, say: (n) => `ラクダが1日に歩く距離の${n}日分` },
+  { m: 100000, say: (n) => `マグロが1日に泳ぐ距離の${n}日分` },
+  { m: 5000, say: (n) => `皇居一周の${n}周分` },
+  { m: 34500, say: (n) => `山手線一周の${n}周分` },
+  { m: 42195, say: (n) => `フルマラソンの${n}回分` },
+  { m: 384400000, say: (n, x) => `月まで（38万4400km）の${(x * 100).toFixed(x < 0.0001 ? 5 : 3)}%` },
 ];
-// 動物が動く距離（よく言われる目安）。「○○の△日分」のように表す
-const ANIMALS = [
-  { km: 0.04, name: "ナマケモノが1日に動く距離", span: "日分" },
-  { km: 0.09, name: "カタツムリが1日に進む距離", span: "日分" },
-  { km: 5, name: "ハムスターが一晩で走る距離", span: "晩分" },
-  { km: 15, name: "ゾウが1日に歩く距離", span: "日分" },
-  { km: 40, name: "ラクダが1日に歩く距離", span: "日分" },
-  { km: 100, name: "マグロが1日に泳ぐ距離", span: "日分" },
-  { km: 70000, name: "キョクアジサシが1年で渡る距離", span: "年分" },
-];
-// 合計の距離に合う動物を2つ選ぶ：ちょうど超えたくらいの動物と、うんと小さい動物
-function animalFacts(totalKm) {
-  const fit = ANIMALS.filter((a) => totalKm >= a.km).pop() || ANIMALS[2];
-  const small = ANIMALS.find((a) => a !== fit && totalKm / a.km >= 10) || ANIMALS[0];
-  return [fit, small].filter((a, i, xs) => xs.indexOf(a) === i).map((a) => `${a.name}の${fmtCount(totalKm / a.km)}${a.span}`);
-}
 // 1kmあたりの目安（体重60kgで歩いたとき約50kcal、歩幅70cmで約1400歩）
 const KCAL_PER_KM = 50, STEPS_PER_KM = 1400;
+// カロリーのたとえ（1つ分のおおよそのkcal）
 const FOODS = [
-  { kcal: 256, name: "ハンバーガー" },
-  { kcal: 180, name: "おにぎり" },
-  { kcal: 220, name: "たい焼き" },
-  { kcal: 140, name: "缶ビール（350ml）" },
+  { kcal: 256, name: "ハンバーガー", unit: "個" }, { kcal: 180, name: "おにぎり", unit: "個" }, { kcal: 220, name: "たい焼き", unit: "個" },
+  { kcal: 140, name: "缶ビール（350ml）", unit: "本" }, { kcal: 86, name: "バナナ", unit: "本" }, { kcal: 45, name: "みかん", unit: "個" },
+  { kcal: 16, name: "角砂糖", unit: "個" }, { kcal: 280, name: "板チョコ", unit: "枚" }, { kcal: 330, name: "ポテトチップス（1袋）", unit: "袋" },
+  { kcal: 240, name: "大福", unit: "個" }, { kcal: 10, name: "ポッキー", unit: "本" }, { kcal: 230, name: "肉まん", unit: "個" },
 ];
-
 const fmtCount = (n) => n >= 100 ? Math.round(n).toLocaleString("ja-JP") : n >= 10 ? n.toFixed(1).replace(/\.0$/, "") : n.toFixed(2).replace(/0$/, "").replace(/\.0$/, "");
-// 通算の距離を、たとえで表す。届いた中でいちばん大きいもの・次の目標・月まで、と食べもの
-function distanceFacts(totalKm) {
-  const reached = LANDMARKS.filter((l) => totalKm >= l.km).pop();
-  const next = LANDMARKS.find((l) => totalKm < l.km);
-  const moon = LANDMARKS[LANDMARKS.length - 1];
-  const facts = [];
-  if (reached) facts.push({ text: `${reached.name}の${fmtCount(totalKm / reached.km)}${reached.unit}` });
-  if (next && next !== moon) facts.push({ text: `次は「${next.name}」（${next.km.toLocaleString("ja-JP")}km）。あと${fmtCount(next.km - totalKm)}km`, progress: totalKm / next.km });
-  const pct = (totalKm / moon.km) * 100;
-  facts.push({ text: `月まで（38万4400km）の${pct < 0.01 ? pct.toFixed(4) : pct.toFixed(2)}%`, progress: totalKm / moon.km });
-  animalFacts(totalKm).forEach((text) => facts.push({ text }));
-  facts.push({ text: `ハンバーガー（直径10cm）を並べると${Math.round(totalKm * 10000).toLocaleString("ja-JP")}個分` });
-  const kcal = totalKm * KCAL_PER_KM;
-  facts.push({ text: `ひとりあたり約${Math.round(kcal).toLocaleString("ja-JP")}kcal。ハンバーガー約${fmtCount(kcal / FOODS[0].kcal)}個分を燃やしました` });
-  facts.push({ text: `歩数にすると、ひとり約${Math.round(totalKm * STEPS_PER_KM).toLocaleString("ja-JP")}歩` });
-  return facts;
+const pickOne = (xs) => xs[Math.floor(Math.random() * xs.length)];
+// 距離のたとえを1つ（0.5〜10万の数に収まるものから。月は小さな割合でも出す）
+function distFact(meters) {
+  const ok = DIST_THINGS.filter((t) => { const x = meters / t.m; return t.m > 1e8 ? meters > 1000 : x >= 0.5 && x <= 100000; });
+  const t = pickOne(ok.length ? ok : DIST_THINGS.slice(0, 2)), x = meters / t.m;
+  return t.say(fmtCount(x), x);
 }
-// 1回の散歩の距離を、ひとことで（seedで毎回ちがうたとえにする）
-function walkFact(meters, seed) {
+// カロリーのたとえを1つ
+function kcalFact(meters) {
+  const kcal = (meters / 1000) * KCAL_PER_KM;
+  const ok = FOODS.filter((f) => kcal / f.kcal >= 0.3 && kcal / f.kcal <= 2000);
+  const f = pickOne(ok.length ? ok : FOODS);
+  return `ひとり約${Math.round(kcal).toLocaleString("ja-JP")}kcal。${f.name}${fmtCount(kcal / f.kcal)}${f.unit}分を燃やしました`;
+}
+// 次の目標（まだ届いていない、いちばん近い場所）
+function nextGoal(totalKm) {
+  const next = LANDMARKS.find((l) => totalKm < l.km);
+  return next ? { text: `次の目標は「${next.name}」（${next.km.toLocaleString("ja-JP")}km）。あと${fmtCount(next.km - totalKm)}km`, progress: totalKm / next.km } : null;
+}
+// 通算のたとえ：距離1つ・カロリー1つ・次の目標
+function distanceFacts(totalKm) {
+  const g = nextGoal(totalKm);
+  return [{ text: distFact(totalKm * 1000) }, { text: kcalFact(totalKm * 1000) }, ...(g ? [g] : [])];
+}
+// 1回の散歩の距離を、ひとことで（距離とカロリーを1つずつ）
+function walkFact(meters) {
   if (meters < 100) return "";
-  const r = Math.abs(seed || 0);
-  const pool = [...SMALL_THINGS, { kcal: true }, ...ANIMALS.filter((a) => a.km * 1000 <= meters).map((a) => ({ animal: a }))];
-  const t = pool[r % pool.length];
-  if (t.animal) return `今日の道のりは、${t.animal.name}の${fmtCount(meters / 1000 / t.animal.km)}${t.animal.span}`;
-  if (t.kcal) {
-    const f = FOODS[Math.floor(r / pool.length) % FOODS.length], kcal = (meters / 1000) * KCAL_PER_KM;
-    return `今日はひとり約${Math.round(kcal)}kcal。${f.name}${fmtCount(kcal / f.kcal)}個分です`;
-  }
-  return `今日の道のりは、${t.name}${t.name.endsWith("と") ? "" : "の"}${fmtCount(meters / (t.per || t.m))}${t.unit}`;
+  return `今日の道のりは、${distFact(meters)}。${kcalFact(meters)}`;
 }

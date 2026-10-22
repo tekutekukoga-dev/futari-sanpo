@@ -360,7 +360,7 @@ window.Cloud = (() => {
     const body = document.createElement("div");
     el.appendChild(body);
     const show = (text) => {
-      body.innerHTML = text ? `<p class="diarytext"></p><button class="link small">書き直してもらう</button>` : `<p class="small muted">この一年の記録をもとに、AIがへんてこな一年の物語を書きます。</p><div class="actions"><button class="secondary">AIに一年の物語を書いてもらう</button></div>`;
+      body.innerHTML = text ? `<p class="diarytext"></p><button class="link small">書き直してもらう</button>` : `<p class="small muted">この一年の記録をもとに、AIが一年のふりかえりを書きます。</p><div class="actions"><button class="secondary">AIに一年のふりかえりを書いてもらう</button></div>`;
       if (text) body.querySelector(".diarytext").textContent = text;
       body.querySelector("button").onclick = async (e) => {
         e.target.disabled = true; e.target.textContent = "書いています…（30秒ほど）";
@@ -378,10 +378,10 @@ window.Cloud = (() => {
     if (group[0].sim || (!text && !ready())) { el.hidden = true; return; }
     el.hidden = false;
     if (text) {
-      el.innerHTML = `<span class="itemlabel">散歩のへんな物語</span><p class="diarytext"></p><button class="link small" id="btnDiary">書き直してもらう</button>`;
+      el.innerHTML = `<span class="itemlabel">散歩日記</span><p class="diarytext"></p><button class="link small" id="btnDiary">書き直してもらう</button>`;
       el.querySelector(".diarytext").textContent = text;
     } else {
-      el.innerHTML = `<span class="itemlabel">散歩のへんな物語</span><p class="small muted">ルート・寄り道・メモ・写真をもとに、AIがへんてこな物語を書きます（ちょっと話を盛ります）。</p><div class="actions"><button class="secondary" id="btnDiary">AIに物語を書いてもらう</button></div>`;
+      el.innerHTML = `<span class="itemlabel">散歩日記</span><p class="small muted">ルート・メモ・写真をもとに、AIが少しユーモアのある日記を書きます。</p><div class="actions"><button class="secondary" id="btnDiary">AIに日記を書いてもらう</button></div>`;
     }
     el.querySelector("#btnDiary").onclick = async (e) => {
       e.target.disabled = true; e.target.textContent = "書いています…（10秒ほど）";

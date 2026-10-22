@@ -557,3 +557,12 @@ a.primary { text-decoration: none; }
 .bingorules { border: 1px solid var(--line); padding: 8px 12px; }
 .bingorules summary { cursor: pointer; font-weight: 600; font-size: 14px; }
 .bingorules ol { margin: 8px 0 2px; padding-left: 20px; display: flex; flex-direction: column; gap: 4px; font-size: 13.5px; line-height: 1.55; }
+/* 名所の場所（散歩中の地図で点滅） */
+.ping { width: 22px; height: 22px; border-radius: 50%; background: #ef8a1f; border: 3px solid #fff; box-shadow: 0 0 0 0 rgb(239 138 31 / .7); animation: ping 1.4s ease-out infinite; }
+@keyframes ping { 0% { box-shadow: 0 0 0 0 rgb(239 138 31 / .7); } 100% { box-shadow: 0 0 0 22px rgb(239 138 31 / 0); } }
+/* 犯罪あつめ・Out of Context の専用カメラ（撮るボタンの上に縦に並べる） */
+.fab.mini { width: 50px; height: 50px; font-size: 12.5px; font-weight: 700; right: calc(max(14px, env(safe-area-inset-right, 0px)) + 8px); border: 2px solid #fff; color: #fff; }
+.fab.mini.crime { bottom: 152px; background: #c62828; }
+.fab.mini.ooc { bottom: 94px; background: #6a3fb5; font-size: 16px; }
+.kotobapick .chip.on { background: var(--fg); color: var(--bg); border-color: var(--fg); }
+#collMemo { margin-top: 8px; }

@@ -1364,6 +1364,69 @@ function drawMeguri(m, route, bucket) {
   });
 }
 
+// ---------- 犯罪あつめ・Out of Context ----------
+// 専用のカメラボタンで撮った写真を、それぞれのフォルダにしまう（写真の本体は散歩の写真と同じところに保存）
+const CRIME_TAGS = ["信号無視", "自転車スマホ", "ポイ捨て", "歩きタバコ", "路上駐車", "放置自転車", "落書き", "犬のフン放置", "不法投棄", "逆走自転車", "その他"];
+const COLLS = {
+  crime: { title: "何の犯罪？", note: "人の顔や車のナンバーは写さないように。写真はふたりだけで楽しんで、SNSなどには載せないでください。注意しに行くのもやめておきましょう", placeholder: "ひとこと（なくてもOK）", tags: CRIME_TAGS },
+  ooc: { title: "何の落とし物？", note: "拾わずに、見つけたまま撮りましょう。財布や鍵など大事なものは、近くの交番へ。落とし物でなくても、場ちがいなものは「なんでここに？」へ", placeholder: "ひとこと（例：フェンスの上に、きちんと置かれていた）", tags: ["手袋・靴下", "帽子", "ぬいぐるみ・おもちゃ", "傘", "靴", "マスク", "アクセサリー", "服", "その他の落とし物", "なんでここに？"] },
+};
+const collAll = (kind) => store.get("coll:" + kind, []);
+let collFor = null, collPending = null;
+// 撮ったあとに、種類やひとことを聞いてからしまう
+function openCollSheet(kind, photoId, blob) {
+  const c = COLLS[kind];
+  collPending = { kind, photoId, tag: c.tags ? null : undefined, pos: walk ? walk.pos : null };
+  $("#collTitle").textContent = c.title;
+  $("#collImg").src = blobUrl(blob);
+  $("#collNote").textContent = c.note;
+  $("#collMemo").value = ""; $("#collMemo").placeholder = c.placeholder;
+  const tags = $("#collTags");
+  tags.innerHTML = ""; tags.hidden = !c.tags;
+  (c.tags || []).forEach((t) => {
+    const b = document.createElement("button"); b.className = "chip"; b.textContent = t;
+    b.onclick = () => { collPending.tag = t; tags.querySelectorAll(".chip").forEach((x) => x.classList.toggle("on", x === b)); };
+    tags.appendChild(b);
+  });
+  $("#collSheet").hidden = false;
+}
+function saveColl() {
+  const p = collPending;
+  if (!p) return;
+  if (!p.tag) return toast(p.kind === "crime" ? "何の犯罪か選んでください（わからなければ「その他」）" : "何の落とし物か選んでください", true);
+  const list = collAll(p.kind);
+  list.push({ photoId: p.photoId, tag: p.tag || null, memo: $("#collMemo").value.trim() || null, at: Date.now(), pos: p.pos, walkId: walk ? walk.id : null });
+  store.set("coll:" + p.kind, list);
+  $("#collSheet").hidden = true; collPending = null;
+  buzz([60, 40, 60]);
+  toast(p.kind === "crime" ? `犯罪あつめにしまいました（${list.length}件め）` : `落とし物あつめにしまいました（${list.length}件め）`);
+}
+// アルバムのフォルダ
+function renderColl(kind) {
+  const box = $(kind === "crime" ? "#crimeBox" : "#oocBox");
+  if (!box) return;
+  const list = collAll(kind);
+  box.innerHTML = "";
+  box.appendChild(mkEl("small muted", list.length
+    ? `${list.length}件あつめました`
+    : kind === "crime" ? "散歩中に、カメラボタンの上の「犯罪」で撮ると、ここにたまります。信号無視、自転車スマホ、ポイ捨て…" : "散歩中に「落」ボタンで撮ると、ここにたまります。フェンスにかけられた手袋、片方だけの靴、塀の上のぬいぐるみ…。場ちがいなもの（なんでここに？）もここへ"));
+  if (list.length) {
+    const counts = mkEl("zukancounts"), cnt = {};
+    list.forEach((x) => (cnt[x.tag] = (cnt[x.tag] || 0) + 1));
+    Object.entries(cnt).sort((a, b) => b[1] - a[1]).forEach(([t, n]) => counts.appendChild(mkEl("chip", `${t} ${n}`)));
+    box.appendChild(counts);
+  }
+  const grid = mkEl("zukangrid");
+  list.slice().reverse().forEach((x) => {
+    const b = document.createElement("button");
+    b.className = "zukanitem";
+    b.append(mkEl("zukanpic"), mkEl("zukanname", x.tag || x.memo || ""), mkEl("zukancat", `${fmtDate(x.at)}${x.memo ? "・" + x.memo : ""}`));
+    idb("photos", "readonly", (s) => s.get(x.photoId)).then((p) => { if (p) { b.querySelector(".zukanpic").style.backgroundImage = `url(${blobUrl(photoBlob(p))})`; b.onclick = () => openViewer(p); } }).catch(() => {});
+    grid.appendChild(b);
+  });
+  box.appendChild(grid);
+}
+
 // ---------- まち図鑑 ----------
 // 歩いて出会った名所を、写真といっしょに集める
 const zukanAll = () => store.get("zukan", []);
@@ -2279,8 +2342,23 @@ function resumeFromRest() {
 }
 
 // ---------- お題カード（1枚ずつ） ----------
+// 名所が、いま向いている方向から見てどっちに何mあるか（コンパスが使えないときは進む方向が基準）
+function whereIs(pos) {
+  const face = heading.compass != null ? heading.compass : routeHeading();
+  const rel = ((bearing(walk.pos, pos) - face + 540) % 360) - 180, d = Math.round(dist(walk.pos, pos) / 5) * 5;
+  const side = Math.abs(rel) < 25 ? "まっすぐ前" : Math.abs(rel) > 155 ? "うしろ" : `${rel > 0 ? "右" : "左"}${Math.abs(rel) < 70 ? "ななめ前" : Math.abs(rel) < 115 ? "手" : "ななめうしろ"}`;
+  return d <= 10 ? "すぐ目の前です" : `${side}の方、${d}mくらいのところです`;
+}
+// 名所のカードが出ているあいだは、地図にもその場所を点滅で出す
+let spotPing = null;
+function showSpotPing(m) {
+  if (spotPing) { spotPing.remove(); spotPing = null; }
+  if (!m || m.kind !== "spot" || !walkMap) return;
+  spotPing = htmlMarker(walkMap, m.spot.pos, mkEl("ping"));
+}
 function renderCard() {
   const m = walk.inbox[0];
+  showSpotPing(m);
   $("#missionCard").hidden = !m;
   if (!m) return updateWalkUI();
   const k = KINDS[m.kind];
@@ -2327,6 +2405,8 @@ function resolve(outcome, memo) {
 
 function updateWalkUI() {
   if (!walk) return;
+  const top = walk.inbox[0];
+  if (top && top.kind === "spot") { $("#missionTip").textContent = `場所：${whereIs(top.spot.pos)}（地図の点滅しているところ）`; $("#missionTip").hidden = false; }
   const r = walk.route, prog = walk.progress;
   const next = r.turns.find((t) => t.along > prog + 3);
   if (walk.resting) {
@@ -2474,6 +2554,7 @@ async function onPhoto(e) {
     const photoId = await addPhoto({ walkId: walk.id, data, type: blob.type || "image/jpeg", mission, pos: walk.pos, at: Date.now() });
     if (bingoPhotoFor) { const b = bingoPhotoFor; bingoPhotoFor = null; bingoPick = null; bingoMark(b.ym, b.idx, true, photoId); }
     if (kotobaFor != null) { const i = kotobaFor; kotobaFor = null; openCrop(photoId, blob, i); }
+    if (collFor) { const k = collFor; collFor = null; openCollSheet(k, photoId, blob); }
     if (zukanFor) {
       const sp = zukanFor; zukanFor = null;
       addZukan(sp, photoId);
@@ -2564,8 +2645,13 @@ function renderBadges(walks) {
   $("#totalCard").hidden = !s.walks;
   $("#totalKm").textContent = `${fmtKm(s.km * 1000)}km`;
   $("#totalSub").textContent = `${s.walks}回・${Math.floor(s.totalMin / 60)}時間${s.totalMin % 60}分`;
+  renderTotalFacts(s.km);
+}
+// たとえは毎回ランダム。押すと別のたとえになる
+function renderTotalFacts(km) {
   $("#totalFacts").innerHTML = "";
-  distanceFacts(s.km).forEach((f) => {
+  $("#totalFacts").onclick = () => renderTotalFacts(km);
+  distanceFacts(km).forEach((f) => {
     const li = document.createElement("li");
     li.textContent = f.text;
     if (f.progress != null) { const bar = mkEl("bar"); bar.appendChild(document.createElement("span")).style.width = `${Math.max(1, Math.min(100, f.progress * 100))}%`; li.appendChild(bar); }
@@ -3091,7 +3177,7 @@ async function openReview(year) {
   }
   // 夫婦用ページ：AIに一年の日記を書いてもらう
   if (window.Cloud && Cloud.renderYear) {
-    const ai = sec("一年のへんな物語");
+    const ai = sec("一年のふりかえり（AI）");
     const summary = [
       `${year}年の散歩：${ws.length}回、合計${km.toFixed(1)}km、${Math.floor(min / 60)}時間${min % 60}分`,
       `月ごとの距離(km)：${months.map((v, i) => `${i + 1}月${v.toFixed(1)}`).join("、")}`,
@@ -3176,6 +3262,7 @@ async function renderAlbum() {
   renderReviewButtons(walks);
   renderKotobaAll();
   renderZukan();
+  renderColl("crime"); renderColl("ooc");
   if (window.Cloud) {
     Cloud.renderBox();
     if (!renderAlbum.syncing) {
@@ -3215,7 +3302,7 @@ async function openDetail(id) {
   const label = (owner) => (group.length > 1 && window.Cloud ? Cloud.nameOf(owner) : "");
   $("#detailTitle").textContent = `${fmtDate(w.startedAt)}の散歩`;
   $("#detailMeta").textContent = `${fmtTime(w.startedAt)}〜${fmtTime(w.endedAt)} ・ ${fmtKm(w.distance)}km${w.dest ? ` ・ ${w.dest.name}まで${w.dest.back === "oneway" ? "片道" : "往復"}` : ""}${w.stopName ? " ・ " + w.stopName + "に寄り道" : ""}${w.night ? " ・ 夜さんぽ" : ""}`;
-  const fact = w.sim ? "" : walkFact(w.distance, w.seed || w.startedAt);
+  const fact = w.sim ? "" : walkFact(w.distance);
   $("#detailFact").textContent = fact; $("#detailFact").hidden = !fact;
   const fresh = (w.newBadges || []).map((bid) => BADGES.find((b) => b.id === bid)).filter(Boolean);
   $("#detailNew").hidden = !fresh.length && !w.newTitle;
@@ -3448,7 +3535,14 @@ function init() {
 
   // カメラは<label for>で開く（iPhoneでいちばん確実な開き方）。開く前にどのお題の写真かを覚えておく
   $("#btnShoot").addEventListener("click", () => { photoFor = walk && walk.inbox[0] ? walk.inbox[0].text : null; });
-  $("#btnFree").addEventListener("click", () => { photoFor = null; bingoPhotoFor = null; kotobaFor = null; });
+  $("#btnFree").addEventListener("click", () => { photoFor = null; bingoPhotoFor = null; kotobaFor = null; collFor = null; zukanFor = null; });
+  // 犯罪あつめ・Out of Context の専用カメラ。家で試すときはしまわない
+  [["#btnCrime", "crime", "犯罪あつめ"], ["#btnOoc", "ooc", "落とし物あつめ"]].forEach(([id, kind, label]) => $(id).addEventListener("click", (e) => {
+    if (walk && walk.sim) { e.preventDefault(); toast("家で試すときは使えません。本番の散歩で使えます"); return; }
+    photoFor = label; collFor = kind; bingoPhotoFor = null; kotobaFor = null; zukanFor = null;
+  }));
+  $("#collSave").onclick = saveColl;
+  $("#collCancel").onclick = () => { $("#collSheet").hidden = true; collPending = null; toast("写真は散歩の写真として残っています"); };
   $("#btnShoot").addEventListener("click", () => {
     bingoPhotoFor = null; kotobaFor = null;
     const m = walk && walk.inbox[0], k = kotobaNow();

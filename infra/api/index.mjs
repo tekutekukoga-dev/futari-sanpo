@@ -432,30 +432,38 @@ async function writeDiary(sub, b) {
     ...walks.flatMap((w) => (w.data.results || []).filter((x) => x.outcome === "done").map((x) => `- ${names[w.owner]}：${x.kind === "talk" ? "話した" : "見つけた"}「${x.text}」${x.memo ? ` メモ「${x.memo}」` : ""}`)),
   ].filter(Boolean);
   // 写真は最大5枚まで、日記の手がかりとして見てもらう
-  const photos = items.filter((i) => i.sk.startsWith("PHOTO#") && ids.includes(i.walkId)).sort((a, b) => a.at - b.at).slice(0, 5);
+  const all = items.filter((i) => i.sk.startsWith("PHOTO#") && ids.includes(i.walkId)).sort((a, b) => a.at - b.at);
+  const step = Math.max(1, all.length / 8), photos = [];
+  for (let i = 0; i < all.length && photos.length < 8; i += step) photos.push(all[Math.floor(i)]);
   const images = [];
   for (const p of photos) {
     try {
       const o = await s3.send(new GetObjectCommand({ Bucket: BUCKET, Key: p.key }));
       const bytes = await o.Body.transformToByteArray();
-      if (bytes.length > 100 && bytes.length < 3_500_000) images.push({ image: { format: "jpeg", source: { bytes } } });
+      if (bytes.length > 100 && bytes.length < 3_500_000) {
+        const t = new Date(p.at).toLocaleTimeString("ja-JP", { timeZone: "Asia/Tokyo", hour: "2-digit", minute: "2-digit" });
+        images.push({ text: `写真${images.length / 2 + 1}（${t}、${names[p.owner] || ""}が撮影）：${p.mission ? `「${p.mission}」で撮った写真` : "自由に撮った写真"}` });
+        images.push({ image: { format: "jpeg", source: { bytes } } });
+      }
     } catch {}
   }
   const res = await converse({
     system: [{ text: [
-      "あなたは、散歩の記録をもとに、ナンセンスで愉快な短い物語を書く作家です。",
-      "散歩のルート・寄り道先・見つけたもの・メモ・写真を「素材」にして、現実から少しずつずれていく、へんてこな物語にする。",
-      "書き方：やわらかい常体。本文は200〜320字。ひとつながりの文章で、見出しや箇条書きは使わない。",
-      "やっていいこと：実際にはなかった出来事や会話を足してよい（面白くなるなら）。物や動物がしゃべってもよい。話が大げさになってもよい。最後は少しとぼけたオチで終える。",
+      "あなたは、散歩の記録と写真から、ちょっとユーモアのある短い散歩日記を書く書き手です。",
+      "書き方：やわらかい常体（〜した。〜だった。）。本文は200〜300字。見出しや箇条書きは使わず、ひとつながりの文章にする。",
+      "いちばん大事なこと：出来事は、記録と写真にあることだけを書く。写真に写っていないもの、記録にない会話・行動・気持ちを、あったこととして書かない。",
+      "面白さの出し方：",
+      "- 写真に写っているものを具体的に描く（色・形・置かれ方）。そのうえで、見立て（「〜みたいだった」）や、軽いツッコミで笑わせる。",
+      "- 想像を書くときは「〜かもしれない」「もし〜だったら」と、想像だとわかる書き方にする。",
+      "- 犯罪あつめ（信号無視など）や落とし物の写真は、責めずに、とぼけた目線で書く。人を悪く書かない。",
       "守ること：",
-      "- 記録にある具体的なもの（場所の名前・見つけたもの・メモの言葉・写真に写っているもの）を少なくとも3つ物語に入れる。どれが本当でどれが作り話か、読んで楽しめるくらいに。",
-      "- 歩いた人は、記録にある呼び名で登場させる。",
-      "- 人を傷つける話、怖すぎる話、下品な話にはしない。実在のお店や人を悪く書かない。",
-      "- 「〜することができた」のような硬い言い回しは使わない。",
-      "最後に改行して「今日の教訓：」で始まる、役に立たない20字以内の一文を添える。",
+      "- 歩いた人は、記録にある呼び名で書く。ふたりの記録なら「ふたりで」。",
+      "- 距離や時間は「4.6km」「58分」のように数字で書く。",
+      "- 「〜することができた」「改めて感じられた」のような硬い言い回しや、大げさな感動は使わない。",
+      "最後に改行して「今日のひとこと：」で始まる20字以内の一文を添える。",
     ].join("\n") }],
-    messages: [{ role: "user", content: [...images, { text: `今日の散歩の記録です。写真は${images.length}枚あります。\n${lines.join("\n")}` }] }],
-    inferenceConfig: { maxTokens: 800, temperature: 1 },
+    messages: [{ role: "user", content: [...images, { text: `今日の散歩の記録です。写真は${images.length / 2}枚あります（上に、何を撮った写真かを添えています）。\n${lines.join("\n")}` }] }],
+    inferenceConfig: { maxTokens: 800, temperature: 0.7 },
   });
   const text = res.output?.message?.content?.map((c) => c.text || "").join("").trim();
   if (!text) throw fail(502, "日記を書けませんでした。少し待ってからもう一度お試しください");
@@ -532,7 +540,7 @@ async function writeYearReview(sub, b) {
   const names = await Promise.all((p?.members || []).map(async (id) => (await profile(id))?.name || "あいて"));
   const res = await converse({
     system: [{ text: [
-      "あなたは、夫婦の一年間の散歩の記録から、一年をふりかえる、ちょっとナンセンスで愉快な物語を書く作家です。実際になかった出来事を足しても、面白ければかまいません。",
+      "あなたは、夫婦の一年間の散歩の記録から、一年をふりかえる、ちょっとユーモアのある短い文章を書く書き手です。出来事は記録にあることだけを書き、面白さは言い回しや見立てで出してください。",
       "書き方：やわらかい常体。本文は300〜420字。見出しや箇条書きは使わず、2〜3段落の文章にする。",
       "守ること：",
       "- 記録にある数字や場所・メモを少なくとも4つ物語に入れる。",

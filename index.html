@@ -10,7 +10,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+JP:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
 <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
-<link rel="stylesheet" href="style.css?v=37">
+<link rel="stylesheet" href="style.css?v=38">
 </head>
 <body>
 
@@ -164,6 +164,8 @@
       <button class="iconbtn" id="btnHeading" aria-label="地図の向き">↑</button>
       <button class="iconbtn" id="btnHelp2" aria-label="使い方">？</button>
     </div>
+    <label class="fab mini crime" for="photoInput" id="btnCrime" aria-label="犯罪あつめの写真を撮る">犯罪</label>
+    <label class="fab mini ooc" for="photoInput" id="btnOoc" aria-label="落とし物あつめの写真を撮る">落</label>
     <label class="fab" for="photoInput" id="btnFree" aria-label="写真を撮る">
       <svg viewBox="0 0 24 24" width="26" height="26" aria-hidden="true"><path fill="currentColor" d="M9 4l-1.5 2H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-3.5L15 4H9zm3 4.5a4.5 4.5 0 1 1 0 9 4.5 4.5 0 0 1 0-9zm0 2a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5z"/></svg><span>撮る</span>
     </label>
@@ -223,8 +225,16 @@
     <span class="itemlabel">これまでに歩いた距離</span>
     <div class="titlerow"><b id="totalKm" class="totalkm"></b><span id="totalSub" class="muted"></span></div>
     <ul id="totalFacts" class="facts"></ul>
-    <span class="muted small">動物の距離やカロリーは、よく言われる目安です</span>
+    <span class="muted small">たとえは押すたびに変わります。動物の距離やカロリーは、よく言われる目安です</span>
     <div id="reviewBtns" class="actions"></div>
+  </div>
+  <div class="group bingocard">
+    <span class="itemlabel">犯罪あつめ</span>
+    <div id="crimeBox"></div>
+  </div>
+  <div class="group bingocard">
+    <span class="itemlabel">落とし物あつめ</span>
+    <div id="oocBox"></div>
   </div>
   <div class="group bingocard">
     <span class="itemlabel">まち図鑑</span>
@@ -332,6 +342,16 @@
     <button id="btnKotobaClose" class="link">閉じる</button>
   </div>
 </div>
+<div id="collSheet" class="overlay" hidden>
+  <div class="guidebox bingobox">
+    <h3 id="collTitle"></h3>
+    <img id="collImg" class="revealimg" alt="">
+    <div id="collTags" class="kotobapick"></div>
+    <input id="collMemo" class="field" maxlength="40">
+    <p id="collNote" class="small muted"></p>
+    <div class="actions"><button id="collSave" class="primary">しまう</button><button id="collCancel" class="link">しまわない</button></div>
+  </div>
+</div>
 <div id="kotobaReveal" class="overlay" hidden>
   <div class="guidebox bingobox">
     <h3 id="revealTitle"></h3>
@@ -372,8 +392,8 @@
 <div id="updateBar" class="updatebar" hidden><span>新しい版があります</span><button id="btnUpdate" class="primary">更新する</button></div>
 
 <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
-<script src="missions.js?v=37"></script>
-<script src="badges.js?v=37"></script>
-<script src="app.js?v=37"></script>
+<script src="missions.js?v=38"></script>
+<script src="badges.js?v=38"></script>
+<script src="app.js?v=38"></script>
 </body>
 </html>
