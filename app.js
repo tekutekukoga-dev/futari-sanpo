@@ -1404,6 +1404,13 @@ const RARITY = {
   "信号無視": "C", "自転車スマホ": "C", "ポイ捨て": "C", "路上駐車": "C", "放置自転車": "C", "歩きタバコ": "U", "落書き": "U", "逆走自転車": "U", "その他": "U", "犬のフン放置": "R", "不法投棄": "SR",
 };
 const RARE_ORDER = { SR: 0, R: 1, U: 2, C: 3 };
+// 警察官ランク：犯罪あつめの件数で階級が上がる
+const POLICE_RANKS = [[0, "見習い"], [1, "巡査"], [3, "巡査長"], [6, "巡査部長"], [10, "警部補"], [15, "警部"], [22, "警視"], [30, "警視正"], [40, "警視長"], [55, "警視監"], [75, "警視総監"]];
+function policeRank(n) {
+  let i = 0;
+  while (i + 1 < POLICE_RANKS.length && n >= POLICE_RANKS[i + 1][0]) i++;
+  return { name: POLICE_RANKS[i][1], from: POLICE_RANKS[i][0], next: POLICE_RANKS[i + 1] || null };
+}
 const RARE_LABEL = { C: "コモン", U: "アンコモン", R: "レア", SR: "スーパーレア" };
 const rareOf = (x) => RARITY[x.tag] || "U";
 // 何日も同じ場所にありそうなもの（「まだいた！」の対象）
@@ -1418,6 +1425,10 @@ function saveColl() {
   store.set("coll:" + p.kind, list);
   $("#collSheet").hidden = true; collPending = null;
   const rare = rareOf(entry);
+  if (p.kind === "crime") {
+    const before = policeRank(list.length - 1).name, after = policeRank(list.length).name;
+    if (after !== before) setTimeout(() => { buzz([100, 50, 100, 50, 400]); toast(`昇進！ ${after}になりました`); }, 2800);
+  }
   buzz(rare === "SR" || entry.kira ? [80, 40, 80, 40, 300] : [60, 40, 60]);
   toast(`${entry.kira ? "キラ！ " : ""}${RARE_LABEL[rare]}（${rare}）！ ${p.kind === "crime" ? "犯罪あつめ" : "落とし物あつめ"}にしまいました（${list.length}件め）`);
 }
@@ -1437,6 +1448,16 @@ function renderColl(kind) {
   box.appendChild(mkEl("small muted", list.length
     ? `${list.length}件あつめました`
     : kind === "crime" ? "散歩中に、カメラボタンの上の「犯罪」で撮ると、ここにたまります。信号無視、自転車スマホ、ポイ捨て…" : "散歩中に「落」ボタンで撮ると、ここにたまります。フェンスにかけられた手袋、片方だけの靴、塀の上のぬいぐるみ…。場ちがいなもの（なんでここに？）もここへ"));
+  if (kind === "crime") {
+    const r = policeRank(list.length), card = mkEl("policerank");
+    card.append(mkEl("small muted", "警察官ランク"), mkEl("rankname", r.name));
+    if (r.next) {
+      const bar = mkEl("bar");
+      bar.appendChild(document.createElement("span")).style.width = `${Math.max(3, ((list.length - r.from) / (r.next[0] - r.from)) * 100)}%`;
+      card.append(bar, mkEl("small muted", `あと${r.next[0] - list.length}件で${r.next[1]}`));
+    } else card.appendChild(mkEl("small muted", "いちばん上の階級です"));
+    box.appendChild(card);
+  }
   if (list.length) {
     const counts = mkEl("zukancounts"), cnt = {};
     list.forEach((x) => (cnt[rareOf(x)] = (cnt[rareOf(x)] || 0) + 1));
