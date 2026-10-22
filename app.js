@@ -847,8 +847,7 @@ async function pickDestOnMap(p) {
 function applyShapeUI() {
   $("#destBox").hidden = !isDest();
   $("#itemTime").hidden = isDest();
-  $("#itemSplit").hidden = isSolo() || (!isDest() && !!MEGURI[plan.meguri]);
-  $("#itemMeguri").hidden = isDest();
+  $("#itemSplit").hidden = isSolo() || !!MEGURI[plan.meguri];
   // 目的地モードでは、合流場所は目的地
   $("#meetBox").hidden = !plan.split || isDest();
   $("#splitDestNote").hidden = !(plan.split && isDest());
@@ -863,13 +862,46 @@ function attachDest(route, idx, d) {
 }
 // 経由地の並び：[家, (寄り道先), 目的地] / 往復は [家, (寄り道先), 目的地, 帰りの経由地, 家]。
 // 帰りの経由地は、行きの道の横にずらして置き、同じ道を戻らないようにする
+// 目的地までの途中で通れる、めぐりの場所（暗渠は線、不動明王・名木は点）を選ぶ。
+// 遠回りしすぎないもの（行きの道から外れる長さが少ないもの）だけを使う
+async function destMeguriPoints(home, D) {
+  const d = dist(home, D), kind = plan.meguri, center = midOf(home, D), r = Math.min(3500, d / 2 + 700);
+  const k = Math.cos(rad(home[0])), vx = (D[1] - home[1]) * k, vy = D[0] - home[0], len2 = vx * vx + vy * vy || 1e-12;
+  const along = (p) => (((p[1] - home[1]) * k) * vx + (p[0] - home[0]) * vy) / len2;
+  const detour = (p) => dist(home, p) + dist(p, D) - d;
+  if (kind === "ankyo") {
+    const streams = ankyoStreams(await findAnkyo(center, r).catch(() => []));
+    let best = null;
+    for (const st of streams.slice(0, 8)) {
+      const pts = pointsAlong(st.ways, 200).filter((p) => along(p) > 0.03 && along(p) < 0.97 && detour(p) < Math.max(800, d * 0.6));
+      if (pts.length && (!best || pts.length > best.pts.length)) best = { st, pts };
+    }
+    if (!best) throw new Error("目的地までの途中に、通れる暗渠が見つかりませんでした。めぐりを「なし」にするか、ほかのめぐりにしてみてください");
+    const pts = best.pts.sort((a, b) => along(a) - along(b));
+    const pick = pts.length > 5 ? pts.filter((_, i) => i % Math.ceil(pts.length / 5) === 0) : pts;
+    return { pts: pick, along, meguri: { kind, name: best.st.name, lines: best.st.ways.map((w) => w.coords.filter((_, i) => i % 2 === 0 || i === w.coords.length - 1)), spots: [] } };
+  }
+  const spots = (await findMeguriSpots(kind, center, r).catch(() => []))
+    .filter((x) => along(x.pos) > 0.03 && along(x.pos) < 0.97 && detour(x.pos) < Math.max(700, d * 0.5) && dist(x.pos, D) > 80)
+    .sort((a, b) => detour(a.pos) - detour(b.pos)).slice(0, 2)
+    .sort((a, b) => along(a.pos) - along(b.pos));
+  if (!spots.length) throw new Error(`目的地までの途中に、${MEGURI[kind].label}が見つかりませんでした。めぐりを「なし」にするか、ほかのめぐりにしてみてください`);
+  return { pts: spots.map((x) => x.pos), along, meguri: { kind, spots: spots.map(({ id, name, label, pos }) => ({ id, name, label, pos })), lines: [] } };
+}
 async function makeDestRoute() {
   const home = plan.home, D = plan.dest.pos, d = dist(home, D);
   if (d > 15000) throw new Error("目的地がスタート地点から遠すぎます（15kmまで）");
   const c = plan.chosen && plan.stop !== "none" ? plan.chosen.pos : null;
-  const out = c ? [home, c, D] : [home, D], stopIndex = c ? 1 : null, di = out.length - 1;
+  // めぐりがあるときは、行きの道の途中に、めぐる場所と寄り道先を「目的地に近づく順」に並べる
+  const mgp = MEGURI[plan.meguri] ? await destMeguriPoints(home, D) : null;
+  const mids = mgp ? [...mgp.pts, ...(c ? [c] : [])].sort((a, b) => mgp.along(a) - mgp.along(b)) : c ? [c] : [];
+  const out = [home, ...mids, D], stopIndex = c ? out.indexOf(c) : null, di = out.length - 1;
+  const withMeguri = (route) => {
+    if (mgp) route.meguri = { ...mgp.meguri, meters: mgp.meguri.kind === "ankyo" ? ankyoMeters(route, mgp.meguri.lines) : 0 };
+    return route;
+  };
   const info = { ...plan.dest, back: plan.back };
-  if (plan.back === "oneway") return attachDest(shapeRoute(await osrm(out, true), out, stopIndex), di, info);
+  if (plan.back === "oneway") return withMeguri(attachDest(shapeRoute(await osrm(out, true), out, stopIndex), di, info));
   const b = bearing(home, D), mid = midOf(home, D);
   // 寄り道先があるときは、その反対側を帰り道にする
   let side = rng(plan.seed)() < 0.5 ? 1 : -1;
@@ -888,7 +920,7 @@ async function makeDestRoute() {
     if (over < 0.04 && fresh > 0.8) break;
   }
   if (!best) throw err || new Error("ルートを作れませんでした");
-  return attachDest(best.route, di, info);
+  return withMeguri(attachDest(best.route, di, info));
 }
 
 // 経路サーバーは2つ。ふだんはOSRMを使い、つながらないときはValhallaに切り替えて、しばらくそちらを使う
@@ -1419,7 +1451,7 @@ async function buildRoute() {
       plan.route = await makeMeguriRoute();
     } else if (isDest()) {
       if (!plan.dest) throw new Error("目的地を選んでください（名前で探すか、地図をタップ）");
-      plan.route = plan.split > 0 && !isSolo() ? await makeDestSplitRoute() : await makeDestRoute();
+      plan.route = plan.split > 0 && !isSolo() && !MEGURI[plan.meguri] ? await makeDestSplitRoute() : await makeDestRoute();
     } else if (plan.split > 0 && !isSolo() && meetPoint()) {
       plan.route = await makeSplitRoute();
     } else {
@@ -1613,8 +1645,12 @@ async function onMake() {
 function sharePayload() {
   const payload = {
     h: plan.home.map((v) => +v.toFixed(5)), m: plan.minutes, i: plan.interval, s: plan.seed, st: plan.stop, th: plan.theme,
-    w: plan.route && (plan.route.detours || plan.route.dest) ? plan.route.waypoints.map((q) => q.map((v) => +v.toFixed(5))) : undefined,
-    si: plan.route && (plan.route.detours || plan.route.dest) ? plan.route.stopIndex : undefined, dt: plan.route && plan.route.detours,
+    w: plan.route && (plan.route.detours || plan.route.dest || plan.route.meguri) ? plan.route.waypoints.map((q) => q.map((v) => +v.toFixed(5))) : undefined,
+    si: plan.route && (plan.route.detours || plan.route.dest || plan.route.meguri) ? plan.route.stopIndex : undefined, dt: plan.route && plan.route.detours,
+    // めぐり：暗渠の線（間引いたもの）と、めぐる場所。受け取った人にも同じ案内が届くように
+    mg: plan.route && plan.route.meguri ? (({ kind, name, lines, spots, meters }) => ({ k: kind, n: name, m: meters,
+      l: lines.map((c) => c.filter((_, i) => i % 2 === 0 || i === c.length - 1).map((q) => q.map((v) => +v.toFixed(5)))),
+      s: spots.map((x) => ({ i: x.id, n: x.name, b: x.label, p: x.pos.map((v) => +v.toFixed(5)) })) }))(plan.route.meguri) : undefined,
     ds: plan.route && plan.route.dest ? (({ name, pos, back, idx }) => ({ n: name, p: pos.map((v) => +v.toFixed(5)), b: back, i: idx }))(plan.route.dest) : undefined,
     sp: plan.route && plan.route.split ? (({ wA, wB, stopIndex, meetName, meetPos, minutes }) => ({ wA: wA.map((q) => q.map((v) => +v.toFixed(5))), wB: wB.map((q) => q.map((v) => +v.toFixed(5))), si: stopIndex, n: meetName, p: meetPos, min: minutes }))(plan.route.split) : undefined,
     c: plan.chosen && plan.stop !== "none" ? { n: plan.chosen.name, p: plan.chosen.pos.map((v) => +v.toFixed(5)), id: plan.chosen.id, t: plan.chosen.type } : null,
@@ -1655,6 +1691,10 @@ async function loadShared() {
   if (!m) return false;
   try {
     const p = JSON.parse(decodeURIComponent(m[1]));
+    const meguriOf = (route) => {
+      if (p.mg) route.meguri = { kind: p.mg.k, name: p.mg.n, meters: p.mg.m || 0, lines: p.mg.l || [], spots: (p.mg.s || []).map((x) => ({ id: x.i, name: x.n, label: x.b, pos: x.p })) };
+      return route;
+    };
     Object.assign(plan, { home: p.h, minutes: p.m, interval: p.i, seed: p.s, stop: p.st, theme: p.th || "any", shared: true, shape: p.ds ? "dest" : "loop", party: "duo" });
     plan.chosen = p.c ? { id: p.c.id, name: p.c.n, pos: p.c.p, type: p.c.t || p.st, d: dist(p.h, p.c.p) } : null;
     plan.candidates = plan.chosen ? [plan.chosen] : [];
@@ -1671,13 +1711,13 @@ async function loadShared() {
     } else if (p.ds) {
       // 目的地へのルートも、経由地をそのまま使って同じ道にする
       plan.dest = { name: p.ds.n, pos: p.ds.p }; plan.back = p.ds.b;
-      plan.route = attachDest(shapeRoute(await osrm(p.w, true), p.w, p.si ?? null), p.ds.i, { ...plan.dest, back: p.ds.b });
+      plan.route = meguriOf(attachDest(shapeRoute(await osrm(p.w, true), p.w, p.si ?? null), p.ds.i, { ...plan.dest, back: p.ds.b }));
       if (p.dt) plan.route.detours = p.dt;
       showSummary(); await drawPlan(); loadPois(plan.route);
     } else if (p.w) {
       // 寄り道を足したルートは、経由地をそのまま使って同じ道にする
-      plan.route = shapeRoute(await osrm(p.w), p.w, p.si ?? null);
-      plan.route.detours = p.dt || [];
+      plan.route = meguriOf(shapeRoute(await osrm(p.w, !!p.mg), p.w, p.si ?? null));
+      if (p.dt) plan.route.detours = p.dt;
       showSummary(); await drawPlan(); loadPois(plan.route);
     } else await buildRoute();
     return true;
