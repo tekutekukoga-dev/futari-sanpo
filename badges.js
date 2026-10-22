@@ -128,6 +128,10 @@ const BADGES = [
   b("stop", "goshiki", "尊", "江戸五色不動", "目黒・目白・目赤・目青・目黄のお不動さんを全部あつめる", 5, (s) => s.goshiki),
   b("stop", "ankyo1", "渠", "暗渠さんぽ", "暗渠を歩いて、まち図鑑に入れる", 1, (s) => s.zukanCat.ankyo || 0),
   b("stop", "ankyo5", "川", "見えない川の地図", "5本のちがう暗渠を歩く", 5, (s) => s.zukanCat.ankyo || 0),
+  b("stop", "shotengai3", "市", "商店街のはしご", "3つのちがう商店街を歩く", 3, (s) => s.zukanCat.shotengai || 0),
+  b("stop", "kissa3", "喫", "喫茶店の常連", "まち図鑑に喫茶店を3軒入れる", 3, (s) => s.zukanCat.kissa || 0),
+  b("stop", "kissa10", "盞", "純喫茶さんぽ", "まち図鑑に喫茶店を10軒入れる", 10, (s) => s.zukanCat.kissa || 0),
+  b("stop", "park10", "遊", "公園はしご名人", "まち図鑑に公園を10か所入れる", 10, (s) => s.zukanCat.park || 0),
   b("stop", "tree5", "樹", "木を見る人", "まち図鑑に名木・巨樹を5本入れる", 5, (s) => s.zukanCat.tree || 0),
   // 特別な日
   b("special", "newyear", "賀", "初さんぽ", "1月1日に散歩する", 1, (s) => s.days.has("0101") ? 1 : 0),

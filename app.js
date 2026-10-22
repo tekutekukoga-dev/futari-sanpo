@@ -391,7 +391,7 @@ function decodeTileLines(bytes, layerName, z, tx, ty) {
         else if (f === 4) { const ge = varint() + p; geom = [p, ge]; p = ge; }
         else skip(t & 7);
       }
-      if (type !== 2 || !geom) return;
+      if ((type !== 2 && type !== 3) || !geom) return;
       p = geom[0];
       let x = 0, y = 0, line = null;
       while (p < geom[1]) {
@@ -869,18 +869,20 @@ async function destMeguriPoints(home, D) {
   const k = Math.cos(rad(home[0])), vx = (D[1] - home[1]) * k, vy = D[0] - home[0], len2 = vx * vx + vy * vy || 1e-12;
   const along = (p) => (((p[1] - home[1]) * k) * vx + (p[0] - home[0]) * vy) / len2;
   const detour = (p) => dist(home, p) + dist(p, D) - d;
-  if (kind === "ankyo") {
-    const streams = ankyoStreams(await findAnkyo(center, r).catch(() => []));
+  const streams = MEGURI[kind].line ? ankyoStreams(await findLines(kind, center, r).catch(() => [])) : [];
+  if (streams.length) {
     let best = null;
     for (const st of streams.slice(0, 8)) {
       const pts = pointsAlong(st.ways, 200).filter((p) => along(p) > 0.03 && along(p) < 0.97 && detour(p) < Math.max(800, d * 0.6));
       if (pts.length && (!best || pts.length > best.pts.length)) best = { st, pts };
     }
-    if (!best) throw new Error("目的地までの途中に、通れる暗渠が見つかりませんでした。めぐりを「なし」にするか、ほかのめぐりにしてみてください");
-    const pts = best.pts.sort((a, b) => along(a) - along(b));
-    const pick = pts.length > 5 ? pts.filter((_, i) => i % Math.ceil(pts.length / 5) === 0) : pts;
-    return { pts: pick, along, meguri: { kind, name: best.st.name, lines: best.st.ways.map((w) => w.coords.filter((_, i) => i % 2 === 0 || i === w.coords.length - 1)), spots: [] } };
+    if (best) {
+      const pts = best.pts.sort((a, b) => along(a) - along(b));
+      const pick = pts.length > 5 ? pts.filter((_, i) => i % Math.ceil(pts.length / 5) === 0) : pts;
+      return { pts: pick, along, meguri: { kind, name: best.st.name, lines: best.st.ways.map((w) => w.coords.filter((_, i) => i % 2 === 0 || i === w.coords.length - 1)), spots: [] } };
+    }
   }
+  if (kind === "ankyo") throw new Error("目的地までの途中に、通れる暗渠が見つかりませんでした。めぐりを「なし」にするか、ほかのめぐりにしてみてください");
   const spots = (await findMeguriSpots(kind, center, r).catch(() => []))
     .filter((x) => along(x.pos) > 0.03 && along(x.pos) < 0.97 && detour(x.pos) < Math.max(700, d * 0.5) && dist(x.pos, D) > 80)
     .sort((a, b) => detour(a.pos) - detour(b.pos)).slice(0, 2)
@@ -897,7 +899,7 @@ async function makeDestRoute() {
   const mids = mgp ? [...mgp.pts, ...(c ? [c] : [])].sort((a, b) => mgp.along(a) - mgp.along(b)) : c ? [c] : [];
   const out = [home, ...mids, D], stopIndex = c ? out.indexOf(c) : null, di = out.length - 1;
   const withMeguri = (route) => {
-    if (mgp) route.meguri = { ...mgp.meguri, meters: mgp.meguri.kind === "ankyo" ? ankyoMeters(route, mgp.meguri.lines) : 0 };
+    if (mgp) route.meguri = { ...mgp.meguri, meters: mgp.meguri.lines.length ? ankyoMeters(route, mgp.meguri.lines) : 0 };
     return route;
   };
   const info = { ...plan.dest, back: plan.back };
@@ -1039,10 +1041,14 @@ function overlapRatio(route, ignore = []) {
 
 // ---------- めぐり（暗渠・不動明王・名木） ----------
 // 好きなものを積極的に通るルート。暗渠は「線」に沿って歩き、不動明王と名木は「点」をつないで回る
+// line: 線に沿って歩くもの（地図には太い線で出す）。それ以外は場所（点）をつないで回る
 const MEGURI = {
-  ankyo: { label: "暗渠", mark: "渠" },
+  ankyo: { label: "暗渠", mark: "渠", line: true, color: "#5ab4e5" },
+  shotengai: { label: "商店街", mark: "商", line: true, color: "#ef8a1f" },
   fudo: { label: "不動明王", mark: "不" },
   tree: { label: "名木・巨樹", mark: "木" },
+  kissa: { label: "純喫茶", mark: "喫" },
+  park: { label: "公園はしご", mark: "園" },
 };
 async function overpassJson(q, ms = 15000) {
   const res = await fetch(OVERPASS, { method: "POST", body: "data=" + encodeURIComponent(q), headers: { "Content-Type": "application/x-www-form-urlencoded" }, signal: AbortSignal.timeout(ms) });
@@ -1053,6 +1059,12 @@ async function overpassJson(q, ms = 15000) {
 // 地図タイル（お寺・お堂）と Photon（名前のついた木やお堂）を先に使い、Overpass は答えたときだけ足す
 const FUDO_NG = /駐車|バス|駅|銀行|不動産|マンション|ハイツ|荘|通り|坂$|橋$|公園|幼稚|保育|クリニック|医院/;
 async function findMeguriSpots(kind, center, r) {
+  if (["kissa", "park", "shotengai"].includes(kind)) {
+    const out = [];
+    (await findTileSpots(kind, center, r)).map((x) => ({ ...x, kind, d: dist(center, x.pos) })).filter((x) => x.d < r * 1.2)
+      .forEach((x) => { if (!out.some((o) => dist(o.pos, x.pos) < 60 || (o.name === x.name && !/お店の多い|名前のわからない|遊具のある/.test(x.name) && dist(o.pos, x.pos) < 1200))) out.push(x); });
+    return out;
+  }
   const list = [];
   const push = (id, name, pos, label) => { if (name && pos) list.push({ id, name, label, pos, kind, d: dist(center, pos) }); };
   const photonAround = async (tag) => {
@@ -1124,6 +1136,91 @@ async function findAnkyo(center, r) {
   });
   return ways;
 }
+// 商店街：名前のついた商店街の通り（線）。地図タイルの道の名前と、Overpass が答えたらそれも使う
+const SHOTENGAI_NAME = /商店街|商店会|銀座|横丁|仲見世|アーケード|名店街|一番街|すずらん通り|モール$|ロード$/;
+async function findShotengai(center, r) {
+  const A = `(around:${Math.round(r)},${center[0].toFixed(5)},${center[1].toFixed(5)})`;
+  const [names, op] = await Promise.all([
+    tilesAround(center, r, (bytes, z, x, y) => decodeTileLines(bytes, "transportation_name", z, x, y)).catch(() => []),
+    overpassJson(`[out:json][timeout:15];way["highway"]["name"~"商店街|商店会|銀座|横丁|仲見世|名店街"]${A};out tags geom 200;`, 9000).catch(() => []),
+  ]);
+  const ways = [];
+  const add = (id, name, coords) => {
+    let len = 0;
+    for (let i = 1; i < coords.length; i++) len += dist(coords[i - 1], coords[i]);
+    if (len > 40 && coords.some((q) => dist(q, center) < r * 1.2)) ways.push({ id, name, river: name, coords, len, real: true });
+  };
+  names.forEach((w, i) => { const nm = w.props["name:ja"] || w.props.name || ""; if (SHOTENGAI_NAME.test(nm) && !/^銀座[一二三四五六七八]?丁?目?$|銀座通り$/.test(nm)) add("sn" + i, nm, w.coords); });
+  op.filter((e) => e.geometry && e.geometry.length > 1).forEach((e) => add("w" + e.id, (e.tags || {}).name || "", e.geometry.map((g) => [g.lat, g.lon])));
+  return ways;
+}
+// 線でめぐるもの（暗渠・商店街）
+const findLines = (kind, center, r) => (kind === "shotengai" ? findShotengai(center, r) : findAnkyo(center, r));
+const CHAIN_KISSA = /スターバックス|スタバ|ドトール|タリーズ|コメダ|エクセルシオール|プロント|サンマルク|ベローチェ|上島|星乃|むさしの森|カフェ・ド・クリエ|クリエ|ブルーボトル|マクドナルド|モスバーガー|コンビニ/;
+const KISSA_WORD = /喫茶|珈琲|茶房|純喫茶|コーヒー|ティールーム|パーラー|カフェテラス/;
+// 純喫茶・公園・お店の多い通り（点）を、地図タイルから探す
+async function findTileSpots(kind, center, r) {
+  if (kind === "kissa") {
+    const pts = await tilesAround(center, r, (bytes, z, x, y) => decodeTilePoints(bytes, "poi", z, x, y)).catch(() => []);
+    const cafes = pts.filter(({ props: pr }) => pr.class === "cafe" && (pr["name:ja"] || pr.name) && !CHAIN_KISSA.test(pr["name:ja"] || pr.name));
+    // 「喫茶」「珈琲」などの名前の店を先に。少なければ、チェーンでないカフェも使う
+    const retro = cafes.filter(({ props: pr }) => KISSA_WORD.test(pr["name:ja"] || pr.name));
+    return (retro.length >= 2 ? retro : cafes).map(({ props: pr, lat, lon }) => ({ id: "t" + lat.toFixed(5) + lon.toFixed(5), name: pr["name:ja"] || pr.name, label: KISSA_WORD.test(pr.name || "") ? "喫茶店" : "カフェ", pos: [lat, lon] }));
+  }
+  if (kind === "park") {
+    // 公園の形（緑地）から真ん中を出す。名前は、近くのバス停などの「〇〇公園」から借りる
+    const [areas, uses, pts] = await Promise.all([
+      tilesAround(center, r, (bytes, z, x, y) => decodeTileLines(bytes, "landcover", z, x, y)).catch(() => []),
+      tilesAround(center, r, (bytes, z, x, y) => decodeTileLines(bytes, "landuse", z, x, y)).catch(() => []),
+      tilesAround(center, r, (bytes, z, x, y) => decodeTilePoints(bytes, "poi", z, x, y)).catch(() => []),
+    ]);
+    // 「〇〇公園前」「〇〇公園北」などのバス停名から、公園の名前だけを取り出す。前に別の地名がついたもの（「三鷹警察署井の頭公園」）は外す
+    const parkNames = pts.map(({ props: pr, lat, lon }) => { const m = (pr["name:ja"] || pr.name || "").match(/^([^\s・　（(]+?公園)/); return m && !/署|局|駅|学校|病院|団地|センター/.test(m[1]) && { name: m[1], pos: [lat, lon] }; }).filter(Boolean);
+    const playgrounds = uses.filter((u) => u.props.class === "playground").map((u) => u.coords[0]);
+    const parks = [];
+    areas.filter((a) => a.props.subclass === "park" || a.props.class === "park").forEach((a) => {
+      const lats = a.coords.map((c) => c[0]), lons = a.coords.map((c) => c[1]);
+      const pos = [(Math.min(...lats) + Math.max(...lats)) / 2, (Math.min(...lons) + Math.max(...lons)) / 2];
+      const size = dist([Math.min(...lats), Math.min(...lons)], [Math.max(...lats), Math.max(...lons)]);
+      if (size < 50) return;
+      // 大きな公園は地図タイルの境目で分かれているので、近いものは1つにまとめる
+      const same = parks.find((q) => dist(q.pos, pos) < Math.max(120, Math.max(q.size, size) / 2 + 80));
+      if (same) { if (size > same.size) { same.pos = pos; same.size = size; } return; }
+      parks.push({ pos, size });
+    });
+    return parks.map((q, i) => {
+      // いちばん多く出てくる名前を、その公園の名前にする
+      const near = parkNames.filter((n) => dist(n.pos, q.pos) < Math.max(150, q.size * 0.7)), cnt = {};
+      near.forEach((n) => (cnt[n.name] = (cnt[n.name] || 0) + 1));
+      const top = Object.entries(cnt).sort((a, b) => b[1] - a[1] || a[0].length - b[0].length)[0];
+      const nm = top && { name: top[0] };
+      const play = playgrounds.some((g) => dist(g, q.pos) < Math.max(80, q.size / 2));
+      return { id: "pk" + q.pos[0].toFixed(4) + q.pos[1].toFixed(4), name: nm ? nm.name : play ? "遊具のある公園" : "名前のわからない公園", label: play ? "遊具のある公園" : "公園", pos: q.pos, size: q.size, i };
+    }).sort((a, b) => b.size - a.size).slice(0, 30);
+  }
+  // 商店街の名前が見つからないとき：お店がぎゅっと集まっている場所を、80m四方のマスで探す。名前は近くの道からつける
+  const [pts, roads] = await Promise.all([
+    tilesAround(center, r, (bytes, z, x, y) => decodeTilePoints(bytes, "poi", z, x, y)).catch(() => []),
+    tilesAround(center, r, (bytes, z, x, y) => decodeTileLines(bytes, "transportation_name", z, x, y)).catch(() => []),
+  ]);
+  const roadName = (pos) => {
+    let best = null, bd = 70;
+    roads.forEach((w) => { const nm = w.props["name:ja"] || w.props.name; if (!nm || /^[0-9]/.test(nm)) return; w.coords.forEach((q) => { const d = dist(q, pos); if (d < bd) { bd = d; best = nm; } }); });
+    return best;
+  };
+  const cells = {};
+  pts.filter(({ props: pr }) => LETTERFUL.has(pr.class) && pr.class !== "railway").forEach(({ lat, lon }) => {
+    const k = `${Math.round(lat * 111320 / 80)},${Math.round(lon * 91000 / 80)}`;
+    (cells[k] = cells[k] || { n: 0, lat: 0, lon: 0 }); cells[k].n++; cells[k].lat += lat; cells[k].lon += lon;
+  });
+  const out = [];
+  Object.values(cells).filter((c) => c.n >= 8).sort((a, b) => b.n - a.n).forEach((c) => {
+    const pos = [c.lat / c.n, c.lon / c.n];
+    if (!out.some((o) => dist(o.pos, pos) < 250)) { const rn = roadName(pos); out.push({ id: "sc" + pos[0].toFixed(4) + pos[1].toFixed(4), name: rn ? `${rn}のお店` : "お店の多い通り", label: `お店${c.n}軒`, pos }); }
+  });
+  return out;
+}
+
 // 暗渠の線を、名前ごとにまとめて1本の流れにする（長い順）
 function ankyoStreams(ways) {
   const by = {};
@@ -1150,14 +1247,53 @@ function ankyoMeters(route, lines) {
   }
   return m;
 }
+// 商店街の一周。名前のついた商店街（線）と、お店の多い通り（点）を、向きの近いものから2〜3か所つないで回る
+async function makeShotengaiLoop(home, target, r0, searchR, stop) {
+  const [streams, clusters] = await Promise.all([
+    findLines("shotengai", home, searchR).then(ankyoStreams).catch(() => []),
+    findTileSpots("shotengai", home, searchR).catch(() => []),
+  ]);
+  const cands = [
+    ...streams.map((st) => { const pts = pointsAlong(st.ways, 120); const c = pts.length ? pts[Math.floor(pts.length / 2)] : st.ways[0].coords[0]; return { st, pts: pts.length ? pts : [c], c, name: st.name }; }),
+    ...clusters.filter((x) => !streams.some((st) => st.ways.some((w) => w.coords.some((q) => dist(q, x.pos) < 120)))).map((x) => ({ spot: x, pts: [x.pos], c: x.pos, name: x.name })),
+  ].map((x) => ({ ...x, d: dist(home, x.c) })).filter((x) => x.d > 120 && x.d < r0 * 1.6);
+  if (!cands.length) throw new Error("近くに商店街やお店の多い通りが見つかりませんでした。歩く時間を長くしてみてください");
+  // 名前のある商店街を優先して、ちょうどいい距離のものを中心に選ぶ
+  const ring = cands.slice().sort((a, b) => (a.st ? 0 : 1) - (b.st ? 0 : 1) || Math.abs(a.d - r0) - Math.abs(b.d - r0));
+  let best = null;
+  for (const c of ring.slice(0, 4)) {
+    const bc = bearing(home, c.c);
+    const friends = cands.filter((x) => x !== c && Math.abs(((bearing(home, x.c) - bc + 540) % 360) - 180) < 80).sort((a, b) => (a.st ? 0 : 1) - (b.st ? 0 : 1) || a.d - b.d).slice(0, 2);
+    const set = [c, ...friends];
+    let pts = set.flatMap((x) => x.pts);
+    if (pts.length > 7) pts = pts.filter((_, i) => i % Math.ceil(pts.length / 7) === 0);
+    const wps = [home, ...byBearing(home, [...pts, ...(stop ? [stop] : [])]), home];
+    const stopIndex = stop ? wps.findIndex((p) => p === stop) : null;
+    let route;
+    try { route = shapeRoute(await osrm(wps, true), wps, stopIndex >= 0 ? stopIndex : null); } catch { continue; }
+    const lines = set.filter((x) => x.st).flatMap((x) => x.st.ways.map((w) => w.coords));
+    const shopM = ankyoMeters(route, lines) + set.filter((x) => x.spot).length * 150;
+    const score = Math.abs(route.total - target) / target + overlapRatio(route, [home]) + (1 - Math.min(1, shopM / Math.max(600, route.total * 0.3)));
+    if (!best || score < best.score) best = { route, score, set, lines };
+  }
+  if (!best) throw new Error("ルートを作れませんでした。少し待ってからもう一度お試しください");
+  const r = best.route, named = best.set.filter((x) => x.st);
+  r.meguri = {
+    kind: "shotengai", name: named.map((x) => x.name).filter(Boolean).join("・"),
+    lines: best.lines.map((c) => c.filter((_, i) => i % 2 === 0 || i === c.length - 1)), meters: ankyoMeters(r, best.lines),
+    spots: best.set.filter((x) => x.spot).map((x) => ({ id: x.spot.id, name: x.spot.name, label: x.spot.label, pos: x.spot.pos })),
+  };
+  return r;
+}
 async function makeMeguriRoute() {
   const home = plan.home, target = loopMeters(), r0 = legRadius(), kind = plan.meguri;
   const stop = plan.chosen && plan.stop !== "none" ? plan.chosen.pos : null;
   const searchR = Math.max(600, r0 * 1.5);
   const tries = [];
-  if (kind === "ankyo") {
-    const streams = ankyoStreams(await findAnkyo(home, searchR).catch(() => []));
-    if (!streams.length) throw new Error("近くに暗渠が見つかりませんでした。歩く時間を長くするか、ほかのめぐりにしてみてください");
+  if (kind === "shotengai") return makeShotengaiLoop(home, target, r0, searchR, stop);
+  const streams = MEGURI[kind].line ? ankyoStreams(await findLines(kind, home, searchR).catch(() => [])) : [];
+  if (kind === "ankyo" && !streams.length) throw new Error("近くに暗渠が見つかりませんでした。歩く時間を長くするか、ほかのめぐりにしてみてください");
+  if (streams.length) {
     // 長い流れから順に、その流れに沿って歩くルートを作ってみる
     for (const st of streams.slice(0, 4)) {
       const along = pointsAlong(st.ways, 250).filter((p) => dist(home, p) < r0 * 1.6);
@@ -1165,9 +1301,11 @@ async function makeMeguriRoute() {
       const pick = along.length > 5 ? along.filter((_, i) => i % Math.ceil(along.length / 5) === 0) : along;
       tries.push({ pts: byBearing(home, stop ? [...pick, stop] : pick), stream: st });
     }
-    if (!tries.length) throw new Error("暗渠が遠すぎました。歩く時間を長くしてみてください");
-  } else {
-    const spots = (await findMeguriSpots(kind, home, searchR).catch(() => [])).filter((s) => s.d > 120);
+    if (!tries.length && kind === "ankyo") throw new Error("暗渠が遠すぎました。歩く時間を長くしてみてください");
+  }
+  if (!tries.length) {
+    // 商店街の名前が見つからないときは、お店の多い通りをめぐる
+    const spots = (await findMeguriSpots(kind === "shotengai" ? "shotengai" : kind, home, searchR).catch(() => [])).filter((s) => s.d > 120);
     if (!spots.length) throw new Error(`近くに${MEGURI[kind].label}が見つかりませんでした。歩く時間を長くしてみてください`);
     // ちょうどいい距離のものを中心に、近い向きにあるものをあと1〜2か所つなぐ
     const ring = spots.slice().sort((a, b) => Math.abs(a.d - r0) - Math.abs(b.d - r0));
@@ -1185,7 +1323,7 @@ async function makeMeguriRoute() {
     let route;
     try { route = shapeRoute(await osrm(pts, true), pts, stopIndex >= 0 ? stopIndex : null); } catch { continue; }
     const lines = t.stream ? t.stream.ways.map((w) => w.coords) : [];
-    const good = t.stream ? ankyoMeters(route, lines) / route.total : t.spots.length / 3;
+    const good = t.stream ? Math.min(1, (ankyoMeters(route, lines) / route.total) * (kind === "shotengai" ? 3 : 1)) : t.spots.length / 3;
     const score = Math.abs(route.total - target) / target * 0.7 + overlapRatio(route, [home]) + (1 - good);
     if (!best || score < best.score) best = { route, score, t, lines };
   }
@@ -1218,6 +1356,7 @@ function drawMeguri(m, route, bucket) {
       m.addSource("ankyo", { type: "geojson", data });
       m.addLayer({ id: "ankyo-line", type: "line", source: "ankyo", layout: { "line-cap": "round", "line-join": "round" }, paint: { "line-color": "#5ab4e5", "line-width": 12, "line-opacity": 0.55 } }, m.getLayer("route-casing") ? "route-casing" : undefined);
     }
+    if (m.getLayer("ankyo-line") && mg) m.setPaintProperty("ankyo-line", "line-color", MEGURI[mg.kind].color || "#5ab4e5");
   }
   (mg ? mg.spots : []).forEach((s) => {
     const done = walk && (walk.meguriVisited || []).includes(s.id);
@@ -1231,7 +1370,7 @@ const zukanAll = () => store.get("zukan", []);
 function zukanCat(spot) {
   if (spot.kind === "fudo" || /不動/.test(spot.name)) return "fudo";
   if (spot.kind === "tree" || /名木|巨樹|保存樹|天然記念物の木/.test(spot.label || "")) return "tree";
-  if (spot.kind === "ankyo") return "ankyo";
+  if (["ankyo", "shotengai", "kissa", "park"].includes(spot.kind)) return spot.kind;
   if (/祠|地蔵|庚申|道祖神/.test((spot.label || "") + spot.name)) return "shrine";
   return spot.group === "art" ? "art" : spot.group === "nature" ? "nature" : "history";
 }
@@ -1281,17 +1420,16 @@ async function renderZukan() {
 function meguriTick(p) {
   const r = walk.route, mg = r.meguri, now = Date.now();
   walk.meguriVisited = walk.meguriVisited || [];
-  if (mg && mg.kind === "ankyo") {
-    const on = mg.lines.some((c) => c.some((q) => dist(p, q) < 25));
+  if (mg && mg.lines.length) {
+    const on = mg.lines.some((c) => c.some((q) => dist(p, q) < 25)), info = MEGURI_INFO[mg.kind];
     if (on && !walk.ankyoIn) {
       walk.ankyoIn = true; walk.ankyoNext = walk.progress + 120; walk.ankyoIdx = 0;
-      const info = MEGURI_INFO.ankyo;
-      walk.inbox.unshift({ kind: "meguri", id: "ankyo-in", label: "暗渠", text: `${info.enter}${mg.name ? `（${mg.name}）` : ""}。${info.about[0]}`, tip: info.hint, arrivedAt: now });
+      walk.inbox.unshift({ kind: "meguri", id: "line-in", label: MEGURI[mg.kind].label, text: `${info.enter}${mg.name ? `（${mg.name}）` : ""}。${info.about[0]}`, tip: info.hint, arrivedAt: now });
       buzz([100, 60, 100]); renderCard();
-    } else if (on && walk.progress >= walk.ankyoNext && walk.ankyoIdx < MEGURI_INFO.ankyo.missions.length) {
-      const m = MEGURI_INFO.ankyo.missions[walk.ankyoIdx++];
+    } else if (on && walk.progress >= walk.ankyoNext && walk.ankyoIdx < info.missions.length) {
+      const m = info.missions.filter(forSolo(walk.solo))[walk.ankyoIdx++];
       walk.ankyoNext = walk.progress + 200;
-      walk.inbox.push({ ...m, id: "ak" + walk.ankyoIdx, label: "暗渠のサイン", arrivedAt: now });
+      if (m) walk.inbox.push({ ...m, id: "ln" + walk.ankyoIdx, label: info.missionLabel, arrivedAt: now });
       buzz([80, 60, 80]); renderCard();
     }
   }
@@ -1514,9 +1652,9 @@ function showSummary() {
       : `「${r.dest.name}」まで約${toMin}分。帰りは別の道でスタート地点へ戻ります。歩きはじめたら、まず${info.first}へ向かいます（地図の矢印の向き）`;
   }
   const mg = r.meguri;
-  if (mg) $("#sumLoop").textContent += mg.kind === "ankyo"
-    ? `。暗渠${mg.name ? `「${mg.name}」` : ""}に沿って、約${fmtKm(mg.meters)}km歩きます（地図の太い水色の線）`
-    : `。${MEGURI[mg.kind].label}めぐり：${mg.spots.map((x) => `「${x.name}」`).join("")}を通ります${mg.spots.some((x) => x.label === "御神木のありそうな神社") ? "（近くの地図に名木が少なかったので、御神木がありそうな神社を選びました）" : ""}`;
+  if (mg) $("#sumLoop").textContent += mg.lines.length
+    ? `。${MEGURI[mg.kind].label}${mg.name ? `「${mg.name}」` : ""}に沿って、約${fmtKm(mg.meters)}km歩きます（地図の太い${mg.kind === "ankyo" ? "水色" : "オレンジ"}の線）${mg.spots.length ? `。ほかに、お店の多い通りを${mg.spots.length}か所通ります` : ""}`
+    : `。${MEGURI[mg.kind].label}${/はしご$/.test(MEGURI[mg.kind].label) ? "" : "めぐり"}：${mg.spots.map((x) => `「${x.name}」`).join("")}を通ります${mg.spots.some((x) => x.label === "御神木のありそうな神社") ? "（近くの地図に名木が少なかったので、御神木がありそうな神社を選びました）" : ""}`;
   $("#sumStop").textContent = plan.chosen && plan.stop !== "none" ? `途中で「${plan.chosen.name}」に寄ります` : r.dest ? "寄り道なしで、目的地へ向かいます" : "寄り道なしで、ぐるっと一周します";
   const { sunset } = sunTimes(new Date(), plan.home[0], plan.home[1]);
   const night = isNightWalk(Date.now(), r.total / WALK_SPEED / 60, plan.home);
@@ -2284,7 +2422,7 @@ async function finishWalk(early) {
   } catch (e) {
     toast("散歩の記録を保存できませんでした：" + (e && e.message), true);
   }
-  if (!w.sim && w.ankyoIn && w.route.meguri) addZukan({ id: "ankyo:" + (w.route.meguri.name || w.id), name: w.route.meguri.name || "名前のない暗渠", label: "暗渠", kind: "ankyo", pos: w.route.meguri.lines[0][0] }, null);
+  if (!w.sim && w.ankyoIn && w.route.meguri) { const mk = w.route.meguri.kind; addZukan({ id: mk + ":" + (w.route.meguri.name || w.id), name: w.route.meguri.name || `名前のない${MEGURI[mk].label}`, label: MEGURI[mk].label, kind: mk, pos: w.route.meguri.lines[0][0] }, null); }
   store.del("active");
   if (!w.sim && record.distance > 300) { const ym = bingoKey(monthKey(new Date(w.startedAt))); if (!bingoState(ym).found[BINGO_FREE]) bingoMark(ym, BINGO_FREE, true); }
   buzz([200, 100, 400]);
