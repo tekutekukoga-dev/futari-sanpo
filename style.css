@@ -459,3 +459,10 @@ input[type="range"] { accent-color: var(--fg); }
   padding: calc(8px + env(safe-area-inset-top, 0px)) max(16px, env(safe-area-inset-right, 0px)) 8px max(16px, env(safe-area-inset-left, 0px));
   background: var(--fg); color: var(--bg); font-size: 14px; }
 .updatebar .primary { background: var(--accent); color: var(--accent-fg); min-height: 36px; padding: 6px 14px; font-size: 14px; }
+
+/* 目的地モード */
+.destsearch { display: flex; gap: 8px; margin: 0; }
+.destsearch .field { flex: 1; min-width: 0; }
+.destsearch .secondary { min-height: 44px; padding: 8px 14px; flex: none; }
+a.primary { text-decoration: none; }
+.pin.dest { background: var(--accent); color: #fff; }

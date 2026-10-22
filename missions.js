@@ -11,7 +11,8 @@ KINDS.split = { label: "別行動", done: "OK", shoot: false };
 KINDS.choose = { label: "分かれ道", done: "", shoot: false };
 KINDS.letter = { label: "手紙", done: "読んだ", shoot: false };
 // 記録に残さない、お知らせだけのカード
-const INFO_KINDS = ["theme", "split", "choose", "letter"];
+KINDS.dest = { label: "目的地", done: "OK", shoot: false };
+const INFO_KINDS = ["theme", "split", "choose", "letter", "dest"];
 
 // 今日のテーマ。観察のお題のうち、テーマに合うものを多めに出す
 const THEMES = {
@@ -242,7 +243,14 @@ const MISSIONS = {
     { kind: "look", text: "建物の屋根や煙突を見上げてみよう。どんな形？" },
     { kind: "talk", cat: "us", text: "最近、いちばん「気持ちいい」と思った瞬間は？" },
   ],
-  final: { kind: "talk", cat: "us", text: "家に着く前に、今日いちばん心に残った景色を1つずつ選んで、理由を話そう" },
+  // 目的地に着いたとき
+  dest: [
+    { kind: "look", text: "目的地に着きました。ここでしか見られないものを、ひとつずつ探そう", tip: "初めての場所は、看板や地面の模様など、家の近くとの違いを探すと見つけやすくなります" },
+    { kind: "talk", cat: "us", text: "ここまでの道で、いちばん印象に残った場所はどこだった？" },
+  ],
+  // 片道のとき、目的地に着く前に出すお題
+  finalOneway: { kind: "talk", cat: "us", text: "目的地に着く前に、今日いちばん心に残った景色を1つずつ選んで、理由を話そう" },
+  final: { kind: "talk", cat: "us", text: "ゴールに着く前に、今日いちばん心に残った景色を1つずつ選んで、理由を話そう" },
 };
 
 function seasonKey(month) {

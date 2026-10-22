@@ -6,6 +6,7 @@ const $$ = (s) => [...document.querySelectorAll(s)];
 const WALK_SPEED = 1.25; // m/s（時速4.5km）
 const SIM_SPEED = 8; // 試しモードの倍速
 const PHOTON = "https://photon.komoot.io/reverse";
+const PHOTON_SEARCH = "https://photon.komoot.io/api/";
 const OVERPASS = "https://overpass-api.de/api/interpreter";
 const NOMINATIM = "https://nominatim.openstreetmap.org/search";
 const OSRM = "https://routing.openstreetmap.de/routed-foot/route/v1/foot/";
@@ -146,6 +147,10 @@ const plan = {
   turnAlert: store.get("turnAlert", false),
   theme: store.get("theme", "any"),
   split: store.get("split", 0),
+  shape: store.get("shape", "loop"), // loop: ぐるっと一周 / dest: 目的地へ
+  back: store.get("back", "round"), // round: 往復（帰りは別の道） / oneway: 片道（帰りは乗り物）
+  dest: store.get("dest", null),
+  destCands: [],
   meet: store.get("meet", "stop"),
   meetCands: [],
   meetChosen: null,
@@ -158,6 +163,7 @@ const plan = {
   shared: false,
 };
 let walk = null;
+const isDest = () => plan.shape === "dest";
 
 // ---------- 地図 ----------
 // ベクター地図（OpenFreeMap）。文字がくっきりして、回転しても地名がまっすぐ読める
@@ -478,7 +484,8 @@ async function addDetour(poi) {
   try {
     const nr = shapeRoute(await osrm(pts), pts, stopIndex);
     nr.pois = r.pois;
-    if (walk.split && walk.branch && !walk.met) {
+    if (r.dest) attachDest(nr, r.dest.idx >= at ? r.dest.idx + 1 : r.dest.idx, r.dest);
+    if (walk && walk.split && walk.branch && !walk.met) {
       let bi = 0, bd = Infinity;
       nr.coords.forEach((c, i) => { const d = dist(c, walk.split.meetPos); if (d < bd) { bd = d; bi = i; } });
       walk.meetAlong = nr.cum[bi];
@@ -492,7 +499,11 @@ async function addDetour(poi) {
 let planMap, planMarkers = [];
 function initPlanMap() {
   planMap = makeMap($("#planMap"));
-  planMap.on("click", (e) => { if (!plan.shared) setHome([e.lngLat.lat, e.lngLat.lng]); });
+  planMap.on("click", (e) => {
+    if (plan.shared) return;
+    const p = [e.lngLat.lat, e.lngLat.lng];
+    if (isDest() && plan.home) pickDestOnMap(p); else setHome(p);
+  });
   drawPlan();
 }
 async function drawPlan(fit = true) {
@@ -515,9 +526,15 @@ async function drawPlan(fit = true) {
     e.addEventListener("click", (ev) => { ev.stopPropagation(); chooseCandidate(c); });
     planMarkers.push(htmlMarker(planMap, c.pos, e));
   });
+  const d = plan.route ? plan.route.dest : isDest() && plan.dest;
+  if (d) {
+    planMarkers.push(htmlMarker(planMap, d.pos, mkEl("homedot")));
+    planMarkers.push(htmlMarker(planMap, d.pos, mkEl("pin dest", `目的地：${d.name}`), { anchor: "bottom", offset: [0, -10] }));
+  }
   if (plan.home) {
     planMarkers.push(htmlMarker(planMap, plan.home, mkEl("homedot")));
-    planMarkers.push(htmlMarker(planMap, plan.home, mkEl("pin", plan.route ? "スタート・ゴール" : "自宅"), { anchor: "bottom", offset: [0, -10] }));
+    const label = !plan.route ? "スタート地点" : plan.route.dest && plan.route.dest.back === "oneway" ? "スタート" : "スタート・ゴール";
+    planMarkers.push(htmlMarker(planMap, plan.home, mkEl("pin", label), { anchor: "bottom", offset: [0, -10] }));
   }
 }
 
@@ -593,15 +610,19 @@ async function fromNominatim(t, home, r) {
 async function findCandidates(type) {
   const t = STOP_TYPES[type];
   if (!t.q) return [];
-  const r = legRadius(), [lat, lon] = plan.home;
-  // お店はそうそう変わらないので、自宅・種類・時間ごとに1週間保存して使い回す
-  const cacheKey = `poi:${type}:${Math.round(plan.minutes / 15)}:${lat.toFixed(4)},${lon.toFixed(4)}`;
+  // 目的地へ行くときは、家と目的地の中ほどで探す（遠回りになりすぎないように）
+  const toDest = isDest() && plan.dest;
+  const center = toDest ? midOf(plan.home, plan.dest.pos) : plan.home;
+  const r = toDest ? Math.max(250, dist(plan.home, plan.dest.pos) / 2) : legRadius(), [lat, lon] = center;
+  const searchR = toDest ? r / 2 : r;
+  // お店はそうそう変わらないので、場所・種類・時間ごとに1週間保存して使い回す
+  const cacheKey = toDest ? `poi:${type}:d${Math.round(r / 100)}:${lat.toFixed(4)},${lon.toFixed(4)}` : `poi:${type}:${Math.round(plan.minutes / 15)}:${lat.toFixed(4)},${lon.toFixed(4)}`;
   const cached = store.get(cacheKey, null);
   let places = cached && Date.now() - cached.at < 7 * 864e5 ? cached.places : null;
   if (!places) {
     // 検索サービスはどれも混むことがあるので、順に試して最初に取れたものを使う
     for (const source of [fromPhoton, fromOverpass, fromNominatim]) {
-      try { places = await source(t, plan.home, r); } catch { places = null; }
+      try { places = await source(t, center, searchR); } catch { places = null; }
       if (places && places.length) break;
     }
     if (!places) throw new Error("お店の情報を取得できませんでした。電波の良いところで、少し待ってからもう一度お試しください");
@@ -610,9 +631,9 @@ async function findCandidates(type) {
   const seen = new Set();
   return places
     .filter((p) => p.name && (!t.name || t.name.test(p.name)) && !seen.has(p.id) && !seen.has(p.name) && seen.add(p.id) && seen.add(p.name))
-    .map((p) => ({ ...p, type, d: dist(plan.home, p.pos) }))
-    .filter((c) => c.d > r * 0.35 && c.d < r * 1.6)
-    .sort((a, b) => Math.abs(a.d - r) - Math.abs(b.d - r))
+    .map((p) => ({ ...p, type, d: dist(plan.home, p.pos), m: dist(center, p.pos) }))
+    .filter((c) => toDest ? c.m < r * 0.85 && c.d > 150 && dist(c.pos, plan.dest.pos) > 150 : c.d > r * 0.35 && c.d < r * 1.6)
+    .sort((a, b) => toDest ? a.m - b.m : Math.abs(a.d - r) - Math.abs(b.d - r))
     .slice(0, 6);
 }
 
@@ -624,7 +645,7 @@ function candidateRow(c, on, typeLabel, onPick) {
   row.className = "candrow" + (on ? " on" : "");
   const b = document.createElement("button");
   b.className = on ? "on" : "";
-  b.innerHTML = `<span></span><span class="d">${typeLabel ? typeLabel + "・" : ""}家から${fmtKm(c.d)}km</span>`;
+  b.innerHTML = `<span></span><span class="d">${typeLabel ? typeLabel + "・" : ""}スタートから${fmtKm(c.d)}km</span>`;
   b.firstChild.textContent = c.name;
   b.onclick = onPick;
   const a = document.createElement("a");
@@ -644,6 +665,109 @@ function renderCandidates() {
   });
 }
 function chooseCandidate(c) { plan.chosen = c; renderCandidates(); buildRoute(); }
+
+// ---------- 目的地 ----------
+const midOf = (a, b) => [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+// 名前で探す。家の近くを優先し、15km以内に絞る
+async function searchDest(q) {
+  const [lat, lon] = plan.home;
+  let list = [];
+  try {
+    const d = await getJson(`${PHOTON_SEARCH}?q=${encodeURIComponent(q)}&lat=${lat.toFixed(4)}&lon=${lon.toFixed(4)}&limit=20`);
+    list = d.features.map((f) => ({
+      id: f.properties.osm_type + f.properties.osm_id, name: f.properties.name || [f.properties.street, f.properties.housenumber].filter(Boolean).join(" "),
+      pos: [f.geometry.coordinates[1], f.geometry.coordinates[0]], area: f.properties.district || f.properties.city || "",
+    }));
+  } catch {}
+  if (!list.length) {
+    const a = dest(plan.home, 315, 15000 * Math.SQRT2), b = dest(plan.home, 135, 15000 * Math.SQRT2);
+    const data = await getJson(`${NOMINATIM}?q=${encodeURIComponent(q)}&viewbox=${a[1]},${a[0]},${b[1]},${b[0]}&bounded=1&format=jsonv2&limit=20`)
+      .catch(() => { throw new Error("場所を探せませんでした。電波の良いところで、もう一度お試しください"); });
+    list = data.map((e) => ({ id: e.osm_type[0].toUpperCase() + e.osm_id, name: e.name, pos: [+e.lat, +e.lon], area: "" }));
+  }
+  const seen = new Set();
+  return list.filter((c) => c.name && !seen.has(c.name) && seen.add(c.name))
+    .map((c) => ({ ...c, d: dist(plan.home, c.pos) }))
+    .filter((c) => c.d > 150 && c.d < 15000)
+    .slice(0, 6);
+}
+async function onDestSearch(e) {
+  e.preventDefault();
+  const q = $("#destInput").value.trim();
+  if (!q) return;
+  if (!plan.home) return showPlanError("先にスタート地点を決めてください");
+  $("#destInput").blur();
+  showPlanError("");
+  try {
+    plan.destCands = await searchDest(q);
+    if (!plan.destCands.length) showPlanError("スタート地点から15km以内に見つかりませんでした。別の名前で探すか、地図をタップしてください");
+  } catch (err) { showPlanError(err.message); }
+  renderDestCands();
+}
+function renderDestCands() {
+  const box = $("#destCands");
+  box.innerHTML = "";
+  const list = [...plan.destCands];
+  if (plan.dest && !list.some((c) => c.name === plan.dest.name)) list.unshift({ ...plan.dest, d: plan.home ? dist(plan.home, plan.dest.pos) : 0 });
+  list.forEach((c) => {
+    box.appendChild(candidateRow(c, plan.dest && plan.dest.name === c.name, "", () => chooseDest(c)));
+  });
+}
+function chooseDest(c) {
+  plan.dest = { name: c.name, pos: c.pos };
+  store.set("dest", plan.dest);
+  renderDestCands();
+  onMake();
+}
+// 地図をタップした場所を目的地にする。名前は近くの建物や通りから付ける
+async function pickDestOnMap(p) {
+  let name = "地図で選んだ場所";
+  try {
+    const d = await getJson(`${PHOTON}?lat=${p[0].toFixed(5)}&lon=${p[1].toFixed(5)}&limit=1`);
+    const f = d.features[0];
+    if (f && f.properties.name && dist(p, [f.geometry.coordinates[1], f.geometry.coordinates[0]]) < 60) name = f.properties.name;
+  } catch {}
+  chooseDest({ name, pos: p });
+}
+// 目的地モードでは、歩く時間と別行動は使わない
+function applyShapeUI() {
+  $("#destBox").hidden = !isDest();
+  $("#itemTime").hidden = isDest();
+  $("#itemSplit").hidden = isDest();
+  $("#mapHint").textContent = isDest() ? "地図をタップすると、そこを目的地にできます（スタート地点は「現在地にする」で変えられます）" : "地図をタップすると、そこをスタート地点にできます";
+  renderDestCands();
+}
+function attachDest(route, idx, d) {
+  route.dest = { name: d.name, pos: d.pos, back: d.back, idx, along: route.legEnds[idx - 1] };
+  return route;
+}
+// 経由地の並び：[家, (寄り道先), 目的地] / 往復は [家, (寄り道先), 目的地, 帰りの経由地, 家]。
+// 帰りの経由地は、行きの道の横にずらして置き、同じ道を戻らないようにする
+async function makeDestRoute() {
+  const home = plan.home, D = plan.dest.pos, d = dist(home, D);
+  if (d > 15000) throw new Error("目的地がスタート地点から遠すぎます（15kmまで）");
+  const c = plan.chosen && plan.stop !== "none" ? plan.chosen.pos : null;
+  const out = c ? [home, c, D] : [home, D], stopIndex = c ? 1 : null, di = out.length - 1;
+  const info = { ...plan.dest, back: plan.back };
+  if (plan.back === "oneway") return attachDest(shapeRoute(await osrm(out, true), out, stopIndex), di, info);
+  const b = bearing(home, D), mid = midOf(home, D);
+  // 寄り道先があるときは、その反対側を帰り道にする
+  let side = rng(plan.seed)() < 0.5 ? 1 : -1;
+  if (c) side = ((bearing(home, c) - b + 540) % 360) - 180 > 0 ? -1 : 1;
+  const ignore = [home, D, ...(c ? [c] : [])];
+  const tries = [side, -side].flatMap((sd) => [0.3, 0.45].map((k) => ({ sd, k })));
+  let best = null, err = null;
+  for (const { sd, k } of tries) {
+    const pts = [...out, dest(mid, b + sd * 90, Math.max(200, d * k)), home];
+    let route;
+    try { route = shapeRoute(await osrm(pts, true), pts, stopIndex); } catch (e) { err = e; continue; }
+    const over = overlapRatio(route, ignore), score = over * 2 + route.total / (d * 2) * 0.1;
+    if (!best || score < best.score) best = { route, score };
+    if (over < 0.04) break;
+  }
+  if (!best) throw err || new Error("ルートを作れませんでした");
+  return attachDest(best.route, di, info);
+}
 
 // 経路サーバーは2つ。ふだんはOSRMを使い、つながらないときはValhallaに切り替えて、しばらくそちらを使う
 let osrmDownUntil = 0;
@@ -849,11 +973,14 @@ async function makeSplitRoute() {
 }
 
 async function buildRoute() {
-  if (!plan.home) return showPlanError("先に自宅を設定してください");
+  if (!plan.home) return showPlanError("先にスタート地点を決めてください");
   showPlanError("");
   $("#btnMake").disabled = true; $("#btnMake").textContent = "ルートを作っています…";
   try {
-    if (plan.split > 0 && meetPoint()) {
+    if (isDest()) {
+      if (!plan.dest) throw new Error("目的地を選んでください（名前で探すか、地図をタップ）");
+      plan.route = await makeDestRoute();
+    } else if (plan.split > 0 && meetPoint()) {
       plan.route = await makeSplitRoute();
     } else {
     const r = rng(plan.seed), home = plan.home, rad0 = legRadius(), target = loopMeters();
@@ -904,8 +1031,14 @@ function showSummary() {
   const r = plan.route, info = loopInfo(r);
   $("#sumDist").textContent = fmtKm(r.total);
   $("#sumTime").textContent = Math.round(r.total / WALK_SPEED / 60);
-  $("#sumLoop").textContent = `${info.clockwise ? "時計回り" : "反時計回り"}のルート。家を出たら、まず${info.first}へ向かいます（地図の矢印の向き）`;
-  $("#sumStop").textContent = plan.chosen && plan.stop !== "none" ? `途中で「${plan.chosen.name}」に寄ります` : "寄り道なしで、ぐるっと一周します";
+  $("#sumLoop").textContent = `${info.clockwise ? "時計回り" : "反時計回り"}のルート。歩きはじめたら、まず${info.first}へ向かいます（地図の矢印の向き）`;
+  if (r.dest) {
+    const toMin = Math.round(r.dest.along / WALK_SPEED / 60);
+    $("#sumLoop").textContent = r.dest.back === "oneway"
+      ? `「${r.dest.name}」までの片道です。歩きはじめたら、まず${info.first}へ向かいます。帰りは電車やバスで（着いたら乗りかえを調べるボタンが出ます）`
+      : `「${r.dest.name}」まで約${toMin}分。帰りは別の道でスタート地点へ戻ります。歩きはじめたら、まず${info.first}へ向かいます（地図の矢印の向き）`;
+  }
+  $("#sumStop").textContent = plan.chosen && plan.stop !== "none" ? `途中で「${plan.chosen.name}」に寄ります` : r.dest ? "寄り道なしで、目的地へ向かいます" : "寄り道なしで、ぐるっと一周します";
   const { sunset } = sunTimes(new Date(), plan.home[0], plan.home[1]);
   const night = isNightWalk(Date.now(), r.total / WALK_SPEED / 60, plan.home);
   $("#sumPois").textContent = r.pois ? (r.pois.length ? `ルート沿いに、ちょっと見たい場所が${r.pois.length}か所あります（地図の丸いマーク）` : "") : "ルート沿いの見どころを探しています…";
@@ -936,7 +1069,7 @@ function showPlanError(msg) { $("#planError").textContent = msg; $("#planError")
 async function prepareMeet() {
   plan.meetCands = []; plan.meetChosen = null;
   renderMeetCands();
-  if (!plan.split) return true;
+  if (!plan.split || isDest()) return true;
   if (plan.meet === "stop") {
     if (plan.stop === "none" || !plan.chosen) { showPlanError("合流場所を「寄り道先」にするには、寄り道先を選んでください"); return false; }
     return true;
@@ -961,7 +1094,8 @@ function renderMeetCands() {
 }
 
 async function onMake() {
-  if (!plan.home) return showPlanError("先に自宅を設定してください");
+  if (!plan.home) return showPlanError("先にスタート地点を決めてください");
+  if (isDest() && !plan.dest) return showPlanError("目的地を選んでください（名前で探すか、地図をタップ）");
   showPlanError("");
   plan.route = null; $("#routeSummary").hidden = true;
   if (plan.stop === "none") { plan.chosen = null; if (await prepareMeet()) await buildRoute(); else drawPlan(); return; }
@@ -976,7 +1110,7 @@ async function onMake() {
         if (plan.candidates.length) break;
       }
     } else plan.candidates = await findCandidates(plan.stop);
-    if (!plan.candidates.length) showPlanError("ちょうどいい距離に見つかりませんでした。歩く時間か寄り道先を変えてみてください");
+    if (!plan.candidates.length) showPlanError(isDest() ? "目的地までの途中に見つかりませんでした。寄り道先を変えてみてください" : "ちょうどいい距離に見つかりませんでした。歩く時間か寄り道先を変えてみてください");
     const r = rng(plan.seed);
     plan.chosen = plan.candidates[Math.floor(r() * Math.min(3, plan.candidates.length))] || null;
     renderCandidates();
@@ -993,8 +1127,9 @@ async function onMake() {
 function shareLink() {
   const payload = {
     h: plan.home.map((v) => +v.toFixed(5)), m: plan.minutes, i: plan.interval, s: plan.seed, st: plan.stop, th: plan.theme,
-    w: plan.route && plan.route.detours ? plan.route.waypoints.map((q) => q.map((v) => +v.toFixed(5))) : undefined,
-    si: plan.route && plan.route.detours ? plan.route.stopIndex : undefined, dt: plan.route && plan.route.detours,
+    w: plan.route && (plan.route.detours || plan.route.dest) ? plan.route.waypoints.map((q) => q.map((v) => +v.toFixed(5))) : undefined,
+    si: plan.route && (plan.route.detours || plan.route.dest) ? plan.route.stopIndex : undefined, dt: plan.route && plan.route.detours,
+    ds: plan.route && plan.route.dest ? (({ name, pos, back, idx }) => ({ n: name, p: pos.map((v) => +v.toFixed(5)), b: back, i: idx }))(plan.route.dest) : undefined,
     sp: plan.route && plan.route.split ? (({ wA, wB, stopIndex, meetName, meetPos, minutes }) => ({ wA: wA.map((q) => q.map((v) => +v.toFixed(5))), wB: wB.map((q) => q.map((v) => +v.toFixed(5))), si: stopIndex, n: meetName, p: meetPos, min: minutes }))(plan.route.split) : undefined,
     c: plan.chosen && plan.stop !== "none" ? { n: plan.chosen.name, p: plan.chosen.pos.map((v) => +v.toFixed(5)), id: plan.chosen.id, t: plan.chosen.type } : null,
   };
@@ -1014,7 +1149,7 @@ async function loadShared() {
   if (!m) return false;
   try {
     const p = JSON.parse(decodeURIComponent(m[1]));
-    Object.assign(plan, { home: p.h, minutes: p.m, interval: p.i, seed: p.s, stop: p.st, theme: p.th || "any", shared: true });
+    Object.assign(plan, { home: p.h, minutes: p.m, interval: p.i, seed: p.s, stop: p.st, theme: p.th || "any", shared: true, shape: p.ds ? "dest" : "loop" });
     plan.chosen = p.c ? { id: p.c.id, name: p.c.n, pos: p.c.p, type: p.c.t || p.st, d: dist(p.h, p.c.p) } : null;
     plan.candidates = plan.chosen ? [plan.chosen] : [];
     $("#sharedBanner").hidden = false;
@@ -1025,6 +1160,12 @@ async function loadShared() {
       const A = shapeRoute(await osrm(p.sp.wA, true), p.sp.wA, p.sp.si ?? null), B = shapeRoute(await osrm(p.sp.wB, true), p.sp.wB, p.sp.si ?? null);
       plan.route = composeSplit(A, B, { meetName: p.sp.n, meetPos: p.sp.p, minutes: p.sp.min, wA: p.sp.wA, wB: p.sp.wB, stopIndex: p.sp.si ?? null });
       plan.split = p.sp.min; plan.role = "B";
+      showSummary(); await drawPlan(); loadPois(plan.route);
+    } else if (p.ds) {
+      // 目的地へのルートも、経由地をそのまま使って同じ道にする
+      plan.dest = { name: p.ds.n, pos: p.ds.p }; plan.back = p.ds.b;
+      plan.route = attachDest(shapeRoute(await osrm(p.w, true), p.w, p.si ?? null), p.ds.i, { ...plan.dest, back: p.ds.b });
+      if (p.dt) plan.route.detours = p.dt;
       showSummary(); await drawPlan(); loadPois(plan.route);
     } else if (p.w) {
       // 寄り道を足したルートは、経由地をそのまま使って同じ道にする
@@ -1039,7 +1180,8 @@ async function loadShared() {
 // ---------- お題の予定 ----------
 // お題は「歩いた距離」で届く。同じseedなら二人のスマホで同じ場所・同じお題になる
 const fits = (night) => (m) => !m.when || m.when === (night ? "night" : "day");
-function missionPlan(seed, total, interval, stopAlong, night, theme, weather) {
+function missionPlan(seed, total, interval, stopAlong, night, theme, weather, oneway) {
+  const avoid = [].concat(stopAlong).filter((v) => v != null);
   const r = rng(seed ^ 0x5a5a);
   let look = shuffle(MISSIONS.look.filter(fits(night)), r).map((m) => ({ kind: "look", ...m }));
   // テーマがある日は、テーマに合うお題を3回に2回の割合で出す
@@ -1063,11 +1205,11 @@ function missionPlan(seed, total, interval, stopAlong, night, theme, weather) {
   const events = [];
   for (let at = 200, n = 0; at < total * 0.85; at += step, n++) {
     // 寄り道先の手前・直後とは重ならないようにする
-    if (stopAlong != null && Math.abs(at - stopAlong) < 150) continue;
+    if (avoid.some((s) => Math.abs(at - s) < 150)) continue;
     const kind = order[n % order.length], pool = kind === "look" ? look : talk;
     events.push({ at, ...pool[used[kind]++ % pool.length], id: "m" + n });
   }
-  events.push({ at: total * 0.9, ...MISSIONS.final, id: "final" });
+  events.push({ at: total * 0.9, ...(oneway ? MISSIONS.finalOneway : MISSIONS.final), id: "final" });
   return events;
 }
 
@@ -1177,12 +1319,12 @@ function startWalk(sim) {
     stopName: plan.chosen && plan.stop !== "none" ? plan.chosen.name : null,
     stopMission: plan.chosen && plan.stop !== "none" ? STOP_TYPES[plan.chosen.type || plan.stop].mission : null,
     progress: 0, track: [plan.home], pos: plan.home, lastFixAt: Date.now(),
-    events: missionPlan(plan.seed, route.total, plan.interval, route.stopAlong, night, themeKey(plan.seed), plan.weather), eventIdx: 0,
+    events: missionPlan(plan.seed, route.total, plan.interval, [route.stopAlong, route.dest && route.dest.back === "round" ? route.dest.along : null], night, themeKey(plan.seed), plan.weather, route.dest && route.dest.back === "oneway"), eventIdx: 0,
     theme: themeKey(plan.seed), weather: plan.weather,
     split: route.split || null, branch: null, askedBranch: false, met: false, role: plan.role,
     turnAlert: plan.turnAlert, alerted: [], noticed: [],
     inbox: [], results: [], photos: 0,
-    stopArrived: false, resting: false, restMs: 0, restStart: 0, off: 0, simAlong: 0, done: false,
+    stopArrived: false, destArrived: false, resting: false, restMs: 0, restStart: 0, off: 0, simAlong: 0, done: false,
   };
   // 夫婦用ページ：AIのお題が届いたら、まだ届いていないお題と入れ替える
   if (window.Cloud) Cloud.missionsFor(route).then((list) => { if (walk && list.length && Cloud.applyMissions(walk, list)) saveActive(); });
@@ -1203,6 +1345,7 @@ function resumeWalkSession() {
   $("#simBadge").hidden = !walk.sim;
   $("#nightBadge").hidden = !walk.night;
   $("#themeBadge").hidden = !walk.theme;
+  $("#destCard").hidden = true; showDestCard();
   if (walk.theme) $("#themeBadge").textContent = THEMES[walk.theme].label;
   $("#btnHeading").textContent = heading.mode === "north" ? "N" : "↑";
   if (!walkMap) {
@@ -1347,6 +1490,8 @@ function onPosition(p) {
 
   // 寄り道先に到着
   if (r.stopAlong != null && !walk.stopArrived && prog >= r.stopAlong - 25) arriveStop();
+  // 目的地に到着
+  if (r.dest && !walk.destArrived && r.dest.along != null && prog >= r.dest.along - 25) arriveDest();
 
   // 通り過ぎたお題を届ける（画面を閉じていた間の分もまとめて）
   let arrived = 0;
@@ -1356,8 +1501,8 @@ function onPosition(p) {
   }
   if (arrived) { buzz([80, 60, 160]); renderCard(); }
 
-  // 帰宅
-  if (prog >= r.total - 25 && prog > r.total * 0.5) return finishWalk();
+  // 帰宅（片道のときは、目的地のカードから終える）
+  if (!(r.dest && r.dest.back === "oneway") && prog >= r.total - 25 && prog > r.total * 0.5) return finishWalk();
   saveActive();
   updateWalkUI();
 }
@@ -1415,6 +1560,23 @@ function arriveStop() {
   buzz([200, 100, 200]);
   renderCard();
   if (walk.sim) setTimeout(() => walk && walk.resting && resumeFromRest(), 6000);
+}
+function arriveDest() {
+  walk.destArrived = true;
+  const d = walk.route.dest;
+  if (d.back === "round") walk.inbox.push({ kind: "dest", id: "dest", text: `「${d.name}」に着きました。ひと休みしたら、帰りは別の道でスタート地点へ戻ります`, arrivedAt: Date.now() });
+  MISSIONS.dest.forEach((x, i) => walk.inbox.push({ ...x, id: "d" + i, arrivedAt: Date.now() }));
+  buzz([200, 100, 200]);
+  showDestCard(); renderCard(); saveActive();
+}
+// 片道：着いたら、帰りの電車・バスを調べるボタンを出す
+function showDestCard() {
+  const d = walk.route.dest;
+  if (!d || d.back !== "oneway" || !walk.destArrived) return;
+  const home = walk.route.waypoints[0], at = (p) => `${p[0].toFixed(5)},${p[1].toFixed(5)}`;
+  $("#destText").textContent = `「${d.name}」に着きました。おつかれさまでした。帰りは電車やバスでどうぞ。`;
+  $("#btnTransit").href = `https://www.google.com/maps/dir/?api=1&origin=${at(walk.pos)}&destination=${at(home)}&travelmode=transit`;
+  $("#destCard").hidden = false;
 }
 function resumeFromRest() {
   if (!walk.resting) return;
@@ -1479,8 +1641,12 @@ function updateWalkUI() {
     $("#nextArrow").textContent = next.arrow;
     $("#nextText").textContent = `${fmtDist(next.along - prog)}先 ${next.dir}`;
     $("#nextSub").textContent = [next.then ? `すぐに${next.then}` : "", next.name ? `${next.name}へ` : ""].filter(Boolean).join("・");
+  } else if (r.dest && !walk.destArrived) {
+    $("#nextArrow").textContent = "↑"; $("#nextText").textContent = "このまま目的地へ"; $("#nextSub").textContent = r.dest.name;
+  } else if (r.dest && r.dest.back === "oneway") {
+    $("#nextArrow").textContent = "✓"; $("#nextText").textContent = "目的地に着きました"; $("#nextSub").textContent = r.dest.name;
   } else {
-    $("#nextArrow").textContent = "⌂"; $("#nextText").textContent = "このまま家へ"; $("#nextSub").textContent = "";
+    $("#nextArrow").textContent = "⌂"; $("#nextText").textContent = "このままゴールへ"; $("#nextSub").textContent = "";
   }
   $("#statRemain").textContent = `${fmtKm(Math.max(0, r.total - prog))}km`;
   const showMeet = walk.split && walk.branch && !walk.met;
@@ -1491,8 +1657,9 @@ function updateWalkUI() {
   const elapsed = (Date.now() - walk.startedAt) * (walk.sim ? SIM_SPEED : 1);
   $("#statTime").textContent = `${Math.floor(elapsed / 60000)}分経過`;
   const ev = walk.events[walk.eventIdx];
-  $("#idleCard").hidden = walk.inbox.length > 0 || walk.resting;
-  $("#idleText").textContent = ev ? `次のお題は ${fmtDist(ev.at - prog)} 先で届きます` : "今日のお題はここまで。家までの道を楽しんで";
+  const arrivedOneway = r.dest && r.dest.back === "oneway" && walk.destArrived;
+  $("#idleCard").hidden = walk.inbox.length > 0 || walk.resting || arrivedOneway;
+  $("#idleText").textContent = ev ? `次のお題は ${fmtDist(ev.at - prog)} 先で届きます` : `今日のお題はここまで。${r.dest && !walk.destArrived ? "目的地" : "ゴール"}までの道を楽しんで`;
 }
 
 // 道を外れたときや、散歩中に見どころへ寄るときに、いまいる場所から引き直す
@@ -1514,6 +1681,12 @@ async function reroute(via) {
     remaining.forEach((e, i) => (e.at = Math.min(nr.total * 0.9, Math.max(50, shift) + step * i)));
     walk.events = remaining; walk.eventIdx = 0;
     nr.pois = r.pois;
+    if (r.dest) {
+      const di = !walk.destArrived && r.dest.idx >= legIdx + 1 ? r.dest.idx - legIdx + viaPts.length : null;
+      nr.dest = { ...r.dest, idx: di, along: di != null ? nr.legEnds[di - 1] : null };
+      // 片道で目的地に着いたあとも、家の位置は乗りかえ案内に使うので残しておく
+      nr.waypoints = [r.waypoints[0], ...nr.waypoints.slice(1)];
+    }
     walk.route = nr; walk.progress = 0; walk.simAlong = 0; walk.off = 0; walk.alerted = [];
     drawWalkRoute();
     $("#offRoute").hidden = true;
@@ -1539,6 +1712,7 @@ async function finishWalk(early) {
     route: w.route.coords.filter((_, i) => i % 3 === 0), track: w.track, photos: w.photos,
     results: w.results, sim: w.sim, night: !!w.night, theme: w.theme || null, weather: w.weather || null, seed: w.seed,
     split: w.split ? { meetName: w.split.meetName, branch: w.branch } : null,
+    dest: w.route.dest ? { name: w.route.dest.name, back: w.route.dest.back } : null,
   };
   // この散歩で新しく取ったバッジと、上がった称号を記録しておく
   try {
@@ -1711,7 +1885,7 @@ async function renderAlbum() {
     b.innerHTML = '<div class="thumb"></div><div><div class="t"></div><div class="m"></div></div>';
     if (ps[0]) b.querySelector(".thumb").style.backgroundImage = `url(${blobUrl(photoBlob(ps[0]))})`;
     const who = group.length > 1 ? "・ふたりで" : w.fromCloud && window.Cloud && w.owner !== Cloud.myId() ? `・${Cloud.nameOf(w.owner)}の記録` : "";
-    b.querySelector(".t").textContent = `${fmtDate(w.startedAt)}${w.stopName ? "・" + w.stopName : ""}${who}`;
+    b.querySelector(".t").textContent = `${fmtDate(w.startedAt)}${w.dest ? "・" + w.dest.name + "へ" : ""}${w.stopName ? "・" + w.stopName : ""}${who}`;
     const done = group.reduce((n, x) => n + (x.results || []).filter((r) => r.outcome === "done").length, 0);
     b.querySelector(".m").textContent = `${fmtKm(w.distance)}km ・ ${w.minutes}分 ・ 気づき${done} ・ 写真${ps.length}枚${w.sim ? " ・ 試し" : ""}`;
     b.onclick = () => openDetail(w.id);
@@ -1729,7 +1903,7 @@ async function openDetail(id) {
   const ps = await photosOfGroup(group);
   const label = (owner) => (group.length > 1 && window.Cloud ? Cloud.nameOf(owner) : "");
   $("#detailTitle").textContent = `${fmtDate(w.startedAt)}の散歩`;
-  $("#detailMeta").textContent = `${fmtTime(w.startedAt)}〜${fmtTime(w.endedAt)} ・ ${fmtKm(w.distance)}km${w.stopName ? " ・ " + w.stopName + "に寄り道" : ""}${w.night ? " ・ 夜さんぽ" : ""}`;
+  $("#detailMeta").textContent = `${fmtTime(w.startedAt)}〜${fmtTime(w.endedAt)} ・ ${fmtKm(w.distance)}km${w.dest ? ` ・ ${w.dest.name}まで${w.dest.back === "oneway" ? "片道" : "往復"}` : ""}${w.stopName ? " ・ " + w.stopName + "に寄り道" : ""}${w.night ? " ・ 夜さんぽ" : ""}`;
   const fresh = (w.newBadges || []).map((bid) => BADGES.find((b) => b.id === bid)).filter(Boolean);
   $("#detailNew").hidden = !fresh.length && !w.newTitle;
   $("#newTitle").hidden = !w.newTitle;
@@ -1835,9 +2009,10 @@ async function importAll(e) {
 
 // ---------- 使い方 ----------
 const GUIDE = [
-  { step: "1 / 5", title: "ルートを作る", pic: "家 → 寄り道 → 家", items: [
-    "地図をタップするか「現在地にする」で、自宅を設定します",
+  { step: "1 / 5", title: "ルートを作る", pic: "スタート → 寄り道 → ゴール", items: [
+    "地図をタップするか「現在地にする」で、スタート地点を決めます",
     "歩く時間と寄り道先を選んで「ルートを作る」",
+    "「目的地へ」にすると、駅やお店まで歩くルートになります。帰りは別の道で歩くか、電車・バスで帰るかを選べます",
     "地図の青い矢印が進む向きです。時計回りか反時計回りかも表示されます",
   ] },
   { step: "2 / 5", title: "ふたりで同じ散歩に", pic: "リンクを送る → 開いて出発", items: [
@@ -1933,6 +2108,11 @@ function init() {
   bindSeg("segTheme", "theme", () => plan.route && showSummary());
   bindSeg("segSplit", "split", () => { $("#meetBox").hidden = !plan.split; resetRoute(); });
   bindSeg("segMeet", "meet", resetRoute);
+  bindSeg("segShape", "shape", () => { applyShapeUI(); resetRoute(); });
+  bindSeg("segBack", "back", resetRoute);
+  $("#destForm").addEventListener("submit", onDestSearch);
+  applyShapeUI();
+  $("#btnDestEnd").onclick = () => finishWalk();
   $("#meetBox").hidden = !plan.split;
   $("#btnBranchA").onclick = () => chooseBranch("A");
   $("#btnBranchB").onclick = () => chooseBranch("B");
