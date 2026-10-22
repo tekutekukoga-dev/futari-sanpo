@@ -453,3 +453,9 @@ input[type="range"] { accent-color: var(--fg); }
 .candrow .gmap::after { content: " ↗"; font-family: var(--mono); text-decoration: none; }
 .candidates .d { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .poipop a + a { margin-top: 2px; }
+
+/* 新しい版のお知らせ（画面の上に出す） */
+.updatebar { position: fixed; z-index: 2200; left: 0; right: 0; top: 0; display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: calc(8px + env(safe-area-inset-top, 0px)) max(16px, env(safe-area-inset-right, 0px)) 8px max(16px, env(safe-area-inset-left, 0px));
+  background: var(--fg); color: var(--bg); font-size: 14px; }
+.updatebar .primary { background: var(--accent); color: var(--accent-fg); min-height: 36px; padding: 6px 14px; font-size: 14px; }

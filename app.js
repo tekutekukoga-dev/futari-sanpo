@@ -1899,6 +1899,21 @@ function bindSeg(id, key, onChange) {
   paint();
 }
 
+// ---------- 新しい版のお知らせ ----------
+// ホーム画面から開いたアプリには再読み込みのボタンがないので、新しい版が出ていたら知らせる。
+// index.html に書かれた app.js?v=番号 を、今動いている番号と比べる
+const RUNNING_VERSION = (document.querySelector('script[src*="app.js?v="]')?.getAttribute("src").match(/v=(\d+)/) || [])[1];
+let lastVersionCheck = 0;
+async function checkUpdate() {
+  if (!RUNNING_VERSION || walk || Date.now() - lastVersionCheck < 60000) return;
+  lastVersionCheck = Date.now();
+  try {
+    const html = await (await fetch(location.pathname + "?v=" + Date.now(), { cache: "no-store" })).text();
+    const latest = (html.match(/app\.js\?v=(\d+)/) || [])[1];
+    if (latest && latest !== RUNNING_VERSION) $("#updateBar").hidden = false;
+  } catch {}
+}
+
 // ---------- 起動 ----------
 function init() {
   try { navigator.storage && navigator.storage.persist && navigator.storage.persist(); } catch {}
@@ -1962,6 +1977,10 @@ function init() {
   $("#btnHelp2").onclick = openGuide;
   $("#btnGuideNext").onclick = () => { if (guidePage < GUIDE.length - 1) { guidePage++; renderGuide(); } else closeGuide(); };
   $("#btnGuideSkip").onclick = closeGuide;
+
+  $("#btnUpdate").onclick = () => location.reload();
+  checkUpdate();
+  document.addEventListener("visibilitychange", () => document.visibilityState === "visible" && checkUpdate());
 
   // 散歩の途中でページが読み込み直されたら、続きから再開する
   const active = store.get("active", null);
