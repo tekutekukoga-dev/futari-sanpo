@@ -1,4 +1,6 @@
 #!/bin/zsh
+# AWSの操作は、作業用のIAMユーザー（futari-sanpo-dev）の「futari」プロファイルで行う（ルートアカウントは使わない）
+export AWS_PROFILE="${AWS_PROFILE:-futari}"
 # 夫婦用ページ（ログイン・ふたりのアルバムつき）を組み立てて、CloudFront に置く。
 # 一般公開版（GitHub Pages）は index.html をそのまま使い、ログイン機能のファイルは読み込まない。
 set -euo pipefail

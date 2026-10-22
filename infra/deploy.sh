@@ -1,4 +1,6 @@
 #!/bin/zsh
+# AWSの操作は、作業用のIAMユーザー（futari-sanpo-dev）の「futari」プロファイルで行う（ルートアカウントは使わない）
+export AWS_PROFILE="${AWS_PROFILE:-futari}"
 # ふたりのアルバムのサーバーを、AWS（東京リージョン）に作る・更新する
 set -euo pipefail
 cd "$(dirname "$0")"
