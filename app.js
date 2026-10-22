@@ -1052,6 +1052,7 @@ function showSummary() {
   $("#sumWeather").textContent = "";
   fetchWeather(plan.home).then((w) => {
     plan.weather = w;
+    badgeHint(r);
     if (!w) return;
     const note = { rain: "。雨の日のお題も混ざります", snow: "。雪の日のお題も混ざります", hot: "。暑いので、日陰を選んで歩きましょう", cold: "。冷えるので、あたたかくして出かけましょう" }[w.kind] || "";
     $("#sumWeather").textContent = `いまの天気は${w.label}・${w.temp}℃${note}`;
@@ -1062,6 +1063,34 @@ function showSummary() {
   }
   $("#sumSun").textContent = night ? `日の入りは${fmtTime(sunset)}。いま出発すると、夜向けのお題も混ざります` : `日の入りは${fmtTime(sunset)}`;
   $("#routeSummary").hidden = false;
+  badgeHint(r);
+}
+// このルートを歩けば取れそうな実績と、あと少しで取れる実績を出す。
+// 出発の時刻や歩いた距離しだいで変わるひみつ（ぞろ目）は数えない
+async function badgeHint(r) {
+  try {
+    const own = ownWalks(await allWalks()), s0 = badgeStats(own), had = new Set(earnedBadges(s0));
+    const fake = {
+      startedAt: Date.now(), distance: r.total, minutes: Math.round(r.total / WALK_SPEED / 60), results: [], photos: 0,
+      stopName: plan.chosen && plan.stop !== "none" ? plan.chosen.name : null, stopType: plan.chosen && plan.stop !== "none" ? plan.chosen.type || plan.stop : null,
+      dest: r.dest ? { name: r.dest.name, back: r.dest.back } : null, split: r.split ? {} : null, detours: (r.detours || []).length,
+      theme: themeKey(plan.seed), weather: plan.weather, night: isNightWalk(Date.now(), r.total / WALK_SPEED / 60, plan.home),
+    };
+    const s1 = badgeStats([...own, fake]);
+    const gain = BADGES.filter((b) => !had.has(b.id) && !["zorome", "clock"].includes(b.id) && b.get(s1) >= b.need);
+    const open = gain.filter((b) => !b.secret).slice(0, 3).map((b) => `「${b.name}」`);
+    const secret = gain.some((b) => b.secret);
+    // あと少し：観察・会話・写真・メモで、残り3回以下のもの
+    const near = BADGES.filter((b) => !had.has(b.id) && ["look", "talk", "photo"].includes(b.cat) && !b.secret)
+      .map((b) => ({ b, left: Math.ceil(b.need - b.get(s0)) })).filter((x) => x.left > 0 && x.left <= 3).sort((a, b) => a.left - b.left)[0];
+    const parts = [];
+    if (open.length) parts.push(`この散歩で${open.join("")}が取れそうです`);
+    if (secret) parts.push("ひみつの実績も取れるかも");
+    if (near) parts.push(`あと${near.left}回で「${near.b.name}」（${near.b.desc}）`);
+    if (plan.route !== r) return;
+    $("#sumBadge").textContent = parts.join("。");
+    $("#sumBadge").hidden = !parts.length;
+  } catch { $("#sumBadge").hidden = true; }
 }
 function showPlanError(msg) { $("#planError").textContent = msg; $("#planError").hidden = !msg; }
 
@@ -1885,11 +1914,50 @@ async function photosOfGroup(group) {
   return all.sort((a, b) => a.at - b.at);
 }
 
+// ---------- ふたりの散歩地図 ----------
+// これまでの散歩の道を1枚の地図に重ねる。何度も通った道ほど濃くなる。
+// 歩いた道の長さは、25m四方のマスで数えて、同じ道を何度通っても1回分にする
+let walkedMap = null;
+function walkedLines(walks) {
+  return walks.filter((w) => !w.sim).map((w) => (w.track && w.track.length > 5 ? w.track : w.route) || []).filter((c) => c.length > 1);
+}
+function uniqueKm(lines) {
+  const cells = new Set();
+  lines.forEach((c) => {
+    const k = Math.cos(rad(c[0][0]));
+    for (let i = 1; i < c.length; i++) {
+      const n = Math.max(1, Math.ceil(dist(c[i - 1], c[i]) / 10));
+      for (let j = 0; j <= n; j++) {
+        const lat = c[i - 1][0] + (c[i][0] - c[i - 1][0]) * (j / n), lon = c[i - 1][1] + (c[i][1] - c[i - 1][1]) * (j / n);
+        cells.add(`${Math.round(lat * 111320 / 25)},${Math.round(lon * 111320 * k / 25)}`);
+      }
+    }
+  });
+  return (cells.size * 25) / 1000;
+}
+async function renderWalkedMap(walks) {
+  const lines = walkedLines(walks);
+  $("#walkedCard").hidden = !lines.length;
+  if (!lines.length) return;
+  $("#walkedText").textContent = `${lines.length}回分の道。歩いた道は約${fmtKm(uniqueKm(lines) * 1000)}km（同じ道は1回に数えます）。何度も通った道ほど濃く見えます`;
+  if (!walkedMap) walkedMap = makeMap($("#walkedMap"));
+  await walkedMap.ready;
+  const data = { type: "FeatureCollection", features: lines.map((c) => lineData(c)) };
+  if (walkedMap.getSource("walked")) walkedMap.getSource("walked").setData(data);
+  else {
+    walkedMap.addSource("walked", { type: "geojson", data });
+    walkedMap.addLayer({ id: "walked", type: "line", source: "walked", layout: { "line-cap": "round", "line-join": "round" }, paint: { "line-color": ROUTE_COLOR, "line-width": 4, "line-opacity": 0.35 } });
+  }
+  walkedMap.resize();
+  walkedMap.fitBounds(boundsOf(lines.flat()), { padding: 24, animate: false, maxZoom: 16 });
+}
+
 async function renderAlbum() {
   releaseUrls();
   const box = $("#albumList");
   const walks = (await allWalks()).sort((a, b) => b.startedAt - a.startedAt);
   renderBadges(ownWalks(walks));
+  renderWalkedMap(walks);
   if (window.Cloud) {
     Cloud.renderBox();
     if (!renderAlbum.syncing) {

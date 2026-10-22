@@ -475,3 +475,6 @@ a.primary { text-decoration: none; }
 .facts li .bar { margin-top: 6px; }
 .badgecat { font-size: 12px; letter-spacing: .06em; color: var(--muted); margin-top: 14px; padding-top: 10px; border-top: 1px solid var(--line); white-space: pre; }
 .fact { margin: 4px 0 0; color: var(--accent); }
+.walkedcard { display: flex; flex-direction: column; gap: 8px; border-top: 1px solid var(--fg); padding: 14px 0; }
+.walkedmap { height: 260px; }
+.badgehint { color: var(--accent); }

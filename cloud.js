@@ -196,6 +196,9 @@ window.Cloud = (() => {
       }
       if (name === "sync") { const ch = await sync(true); if (ch) renderAlbum(); }
       if (name === "push") await enablePush();
+      if (name === "fineOn") await setFineDay(true, "weekend");
+      if (name === "fineSwitch") await setFineDay(true, ls.get("fineDay", {}).days === "daily" ? "weekend" : "daily");
+      if (name === "fineOff") await setFineDay(false);
       ls.set("cloudMe", me);
       if (["create", "join", "refresh"].includes(name) && ready()) sync(true).then((ch) => ch && renderAlbum());
     } catch (e) {
@@ -282,10 +285,25 @@ window.Cloud = (() => {
   const standalone = () => navigator.standalone || matchMedia("(display-mode: standalone)").matches;
   const pushSupported = () => "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
   function pushRow() {
-    if (ls.get("pushOn", false) && pushSupported() && Notification.permission === "granted") return `<p class="small muted">通知：オン（写真の追加・合流・別行動の知らせが届きます）</p>`;
+    if (ls.get("pushOn", false) && pushSupported() && Notification.permission === "granted") return `<p class="small muted">通知：オン（写真の追加・合流・別行動の知らせが届きます）</p>${fineRow()}`;
     if (!pushSupported() || !standalone()) return `<p class="small muted">通知を受け取るには、共有ボタンの「ホーム画面に追加」から開いてください。</p>`;
     if (Notification.permission === "denied") return `<p class="small muted">通知がオフになっています。iPhoneの「設定 → 通知 → ふたり散歩」でオンにできます。</p>`;
     return `<div class="actions"><button class="secondary" data-act="push">通知をオンにする</button></div>`;
+  }
+  // 散歩日和の知らせ：前日の20時と当日の8時に、晴れて歩きやすそうな日だけ届く
+  function fineRow() {
+    const f = ls.get("fineDay", null);
+    if (f) return `<p class="small muted">散歩日和の知らせ：オン（${f.days === "daily" ? "毎日" : "土日・祝日"}。前日の20時と当日の8時）</p>
+      <div class="actions"><button class="link" data-act="fineSwitch">${f.days === "daily" ? "土日・祝日だけにする" : "毎日にする"}</button><button class="link" data-act="fineOff">オフにする</button></div>`;
+    return `<p class="small muted">晴れて歩きやすそうな日を、前日の夜と当日の朝に知らせます。</p>
+      <div class="actions"><button class="secondary" data-act="fineOn">散歩日和を知らせてもらう</button></div>`;
+  }
+  async function setFineDay(on, days) {
+    if (on && !plan.home) throw new Error("先に散歩のページでスタート地点を決めてください（天気を調べる場所に使います）");
+    // サーバーには約1kmに丸めた位置だけを送る
+    const r = await api("/fineday", { method: "POST", body: on ? { on: true, lat: +plan.home[0].toFixed(2), lon: +plan.home[1].toFixed(2), days } : { on: false } });
+    ls.set("fineDay", r.on ? { days: r.days } : null);
+    toast(r.on ? `散歩日和の知らせをオンにしました（${r.days === "daily" ? "毎日" : "土日・祝日"}）` : "散歩日和の知らせをオフにしました");
   }
   const keyBytes = (b64) => { const s = atob(b64.replace(/-/g, "+").replace(/_/g, "/")); return Uint8Array.from(s, (c) => c.charCodeAt(0)); };
   async function enablePush() {

@@ -10,7 +10,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+JP:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
 <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
-<link rel="stylesheet" href="style.css?v=24">
+<link rel="stylesheet" href="style.css?v=25">
 </head>
 <body>
 
@@ -110,6 +110,7 @@
       <li id="sumTheme"></li>
       <li id="sumWeather"></li>
       <li id="sumSun"></li>
+      <li id="sumBadge" class="badgehint" hidden></li>
     </ul>
     <button id="btnStart" class="primary">出発する</button>
     <div class="actions">
@@ -205,6 +206,11 @@
     <ul id="totalFacts" class="facts"></ul>
     <span class="muted small">動物の距離やカロリーは、よく言われる目安です</span>
   </div>
+  <div class="group walkedcard" id="walkedCard" hidden>
+    <span class="itemlabel">ふたりの散歩地図</span>
+    <div id="walkedMap" class="map walkedmap"></div>
+    <span id="walkedText" class="muted small"></span>
+  </div>
   <div class="group titlecard">
     <span class="itemlabel">いまの称号</span>
     <div class="titlerow"><b id="titleName" class="titlename"></b><span id="titlePts" class="muted"></span></div>
@@ -283,8 +289,8 @@
 <div id="updateBar" class="updatebar" hidden><span>新しい版があります</span><button id="btnUpdate" class="primary">更新する</button></div>
 
 <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
-<script src="missions.js?v=24"></script>
-<script src="badges.js?v=24"></script>
-<script src="app.js?v=24"></script>
+<script src="missions.js?v=25"></script>
+<script src="badges.js?v=25"></script>
+<script src="app.js?v=25"></script>
 </body>
 </html>

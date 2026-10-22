@@ -223,6 +223,8 @@ Resources:
           BUCKET: !Ref PhotosBucket
           SITE_URL: !Sub https://${SiteDistribution.DomainName}
           MAIL_FROM: !Select [0, !Split [",", !Ref AllowedEmails]]
+          VAPID_PUBLIC: !Ref VapidPublic
+          VAPID_PRIVATE: !Ref VapidPrivate
       Code:
         ZipFile: "exports.weekly = async () => ({ ok: false });"
   WeeklySchedule:
@@ -239,6 +241,37 @@ Resources:
       FunctionName: !Ref WeeklyFunction
       Principal: events.amazonaws.com
       SourceArn: !GetAtt WeeklySchedule.Arn
+  # 散歩日和の知らせ。前日の20時（明日の予報）と、当日の8時（今日の予報）。日本時間
+  FineDayEvening:
+    Type: AWS::Events::Rule
+    Properties:
+      ScheduleExpression: cron(0 11 * * ? *)
+      Targets:
+        - Id: fineday-evening
+          Arn: !GetAtt WeeklyFunction.Arn
+          Input: '{"kind":"fineday","when":"evening"}'
+  FineDayEveningPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref WeeklyFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt FineDayEvening.Arn
+  FineDayMorning:
+    Type: AWS::Events::Rule
+    Properties:
+      ScheduleExpression: cron(0 23 * * ? *)
+      Targets:
+        - Id: fineday-morning
+          Arn: !GetAtt WeeklyFunction.Arn
+          Input: '{"kind":"fineday","when":"morning"}'
+  FineDayMorningPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref WeeklyFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt FineDayMorning.Arn
   # メールの送り先と送り元（確認メールのリンクを押すと使えるようになる）
   MailIdentity1:
     Type: AWS::SES::EmailIdentity

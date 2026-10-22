@@ -12,6 +12,7 @@
 //   PAIR#{pair} / AIM#{key}          AIのお題（二人で同じものを使う。2日で自動削除）
 //   USER#{id}   / PUSH#{hash}        通知の送り先（ブラウザごと）
 //   USER#{id}   / LOC                別行動中の現在地（2時間で自動削除）
+//   USER#{id}   / PROFILE の fineDay  散歩日和の知らせ（スタート地点を約1kmに丸めた位置と、土日だけか毎日か）
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import { DynamoDBDocumentClient, GetCommand, PutCommand, QueryCommand, UpdateCommand, DeleteCommand, ScanCommand, TransactWriteCommand } from "@aws-sdk/lib-dynamodb";
 import { BedrockRuntimeClient, ConverseCommand } from "@aws-sdk/client-bedrock-runtime";
@@ -47,6 +48,7 @@ export const handler = async (event) => {
     if (method === "GET" && path === "/walks") return json(200, await listWalks(sub));
     if (method === "PUT" && path.startsWith("/walks/")) return json(200, await saveWalk(sub, decodeURIComponent(path.slice(7)), body));
     if (method === "POST" && path === "/photos") return json(200, await newPhoto(sub, body));
+    if (method === "POST" && path === "/fineday") return json(200, await setFineDay(sub, body));
     if (method === "POST" && path === "/push/subscribe") return json(200, await subscribePush(sub, body));
     if (method === "POST" && path === "/events") return json(200, await walkEvent(sub, body));
     if (method === "POST" && path === "/letters") return json(200, await writeLetter(sub, body));
@@ -260,6 +262,70 @@ async function sendPush(target, text) {
   });
   return res.status;
 }
+// ---------- 散歩日和の知らせ（前日20時と当日8時） ----------
+// 位置は小数2けた（約1km）に丸めたものだけを預かる
+async function setFineDay(sub, b) {
+  if (!b.on) {
+    await ddb.send(new UpdateCommand({ TableName: TABLE, Key: { pk: `USER#${sub}`, sk: "PROFILE" }, UpdateExpression: "REMOVE fineDay" }));
+    return { on: false };
+  }
+  const lat = Math.round(Number(b.lat) * 100) / 100, lon = Math.round(Number(b.lon) * 100) / 100;
+  if (!isFinite(lat) || !isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) throw fail(400, "位置が正しくありません");
+  const fineDay = { lat, lon, days: b.days === "daily" ? "daily" : "weekend" };
+  await ddb.send(new UpdateCommand({ TableName: TABLE, Key: { pk: `USER#${sub}`, sk: "PROFILE" }, UpdateExpression: "SET fineDay = :f", ExpressionAttributeValues: { ":f": fineDay } }));
+  return { on: true, ...fineDay };
+}
+// 日本時間の日付（YYYY-MM-DD）と曜日
+function jstDay(offsetDays) {
+  const d = new Date(Date.now() + 9 * 3600e3 + offsetDays * 864e5);
+  return { ymd: d.toISOString().slice(0, 10), dow: d.getUTCDay() };
+}
+async function holidaysJp() {
+  try { const r = await fetch("https://holidays-jp.github.io/api/v1/date.json", { signal: AbortSignal.timeout(5000) }); return r.ok ? await r.json() : {}; } catch { return {}; }
+}
+const WEATHER_WORD = (c) => (c <= 1 ? "晴れ" : c === 2 ? "晴れ時々くもり" : "くもり");
+// 歩きやすい日か：雨や雪の予報がなく、雨の確率30%以下、最高気温12〜28℃、強い風なし
+async function fineForecast(lat, lon, ymd) {
+  const q = `latitude=${lat}&longitude=${lon}&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,wind_speed_10m_max&timezone=Asia%2FTokyo&start_date=${ymd}&end_date=${ymd}`;
+  const r = await fetch(`https://api.open-meteo.com/v1/forecast?${q}`, { signal: AbortSignal.timeout(8000) });
+  if (!r.ok) return null;
+  const d = (await r.json()).daily;
+  const code = d.weather_code[0], tmax = Math.round(d.temperature_2m_max[0]), tmin = Math.round(d.temperature_2m_min[0]);
+  const rain = d.precipitation_probability_max[0] ?? 0, wind = d.wind_speed_10m_max[0] ?? 0;
+  const ok = code <= 3 && rain <= 30 && tmax >= 12 && tmax <= 28 && wind < 30;
+  return ok ? { word: WEATHER_WORD(code), tmax, tmin, rain } : null;
+}
+// when: "evening"（前日の夜に、明日の予報で）／"morning"（当日の朝に、今日の予報で）
+async function fineDay(when) {
+  const day = jstDay(when === "evening" ? 1 : 0);
+  const restDay = { 0: true, 6: true }[day.dow] || !!(await holidaysJp())[day.ymd];
+  const people = [];
+  let start;
+  do {
+    const r = await ddb.send(new ScanCommand({ TableName: TABLE, FilterExpression: "sk = :p AND attribute_exists(fineDay)", ExpressionAttributeValues: { ":p": "PROFILE" }, ExclusiveStartKey: start }));
+    people.push(...(r.Items || []));
+    start = r.LastEvaluatedKey;
+  } while (start);
+  const cache = {};
+  let sent = 0;
+  for (const p of people) {
+    try {
+      const f = p.fineDay;
+      if (f.days !== "daily" && !restDay) continue;
+      const key = `${f.lat},${f.lon}`;
+      cache[key] ??= await fineForecast(f.lat, f.lon, day.ymd);
+      const fc = cache[key];
+      if (!fc) continue;
+      const detail = `${fc.word}・最高${fc.tmax}℃・雨の確率${fc.rain}%`;
+      await pushTo(p.pk.slice(5), when === "evening"
+        ? { title: "明日は散歩日和になりそう", body: `${detail}。ふたりで歩く予定を立ててみませんか？`, tag: "fineday" }
+        : { title: "今日は散歩日和です", body: `${detail}。少しだけでも歩きませんか？`, tag: "fineday" });
+      sent++;
+    } catch (e) { console.error("fineday", p.pk, e.message); }
+  }
+  return { people: people.length, sent };
+}
+
 // 相手に知らせる。kind ごとに間隔をあける（写真は10分に1回まで）
 async function notifyPartner(sub, pairId, kind, make) {
   const partner = await partnerOf(sub, pairId);
@@ -374,7 +440,9 @@ async function writeDiary(sub, b) {
 }
 
 // ---------- 週末のふりかえりメール（毎週日曜20時） ----------
-export const weekly = async () => {
+export const weekly = async (event) => {
+  // 同じ関数を、散歩日和の知らせ（前日20時・当日8時）にも使う
+  if (event?.kind === "fineday") return fineDay(event.when);
   const pairs = [];
   let start;
   do {
