@@ -527,3 +527,5 @@ a.primary { text-decoration: none; }
 .cropwrap { position: relative; max-height: 55vh; overflow: hidden; }
 .cropwrap img { display: block; max-width: 100%; max-height: 55vh; margin: 0 auto; }
 .cropframe { position: absolute; border: 3px solid var(--accent); box-shadow: 0 0 0 9999px rgb(0 0 0 / .35); pointer-events: none; }
+.kotobanow { font-size: 18px; font-weight: 600; }
+.revealimg { width: 100%; display: block; margin: 8px 0; }

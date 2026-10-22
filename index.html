@@ -10,7 +10,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+JP:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
 <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
-<link rel="stylesheet" href="style.css?v=28">
+<link rel="stylesheet" href="style.css?v=29">
 </head>
 <body>
 
@@ -306,6 +306,13 @@
     <button id="btnKotobaClose" class="link">閉じる</button>
   </div>
 </div>
+<div id="kotobaReveal" class="overlay" hidden>
+  <div class="guidebox bingobox">
+    <h3 id="revealTitle"></h3>
+    <img id="revealImg" class="revealimg" alt="" hidden>
+    <div class="actions"><button id="revealSave" class="primary">保存・共有する</button><button id="revealClose" class="link">閉じる</button></div>
+  </div>
+</div>
 <div id="cropOverlay" class="overlay" hidden>
   <div class="guidebox bingobox">
     <h3>文字のところを押してください</h3>
@@ -339,8 +346,8 @@
 <div id="updateBar" class="updatebar" hidden><span>新しい版があります</span><button id="btnUpdate" class="primary">更新する</button></div>
 
 <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
-<script src="missions.js?v=28"></script>
-<script src="badges.js?v=28"></script>
-<script src="app.js?v=28"></script>
+<script src="missions.js?v=29"></script>
+<script src="badges.js?v=29"></script>
+<script src="app.js?v=29"></script>
 </body>
 </html>

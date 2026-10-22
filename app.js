@@ -404,6 +404,7 @@ function tileTags(pr) {
   if (cls === "information" && sub === "board" && pr.name) return { historic: "board" };
   return {};
 }
+const LETTERFUL = new Set(["shop", "grocery", "clothing_store", "restaurant", "fast_food", "cafe", "bar", "beer", "bakery", "ice_cream", "alcohol_shop", "butcher", "pharmacy", "bank", "hairdresser", "laundry", "cinema", "music", "books", "stationery", "florist", "jewelry", "shoes", "gift", "hardware", "furniture", "electronics", "mobile_phone", "optician", "toys", "post", "railway", "library", "art_gallery", "doctors", "dentist", "car", "bicycle", "deli", "seafood", "confectionery", "tea", "coffee", "convenience"]);
 async function poisFromTiles(route) {
   const z = 14, n = 2 ** z;
   const lats = route.coords.map((c) => c[0]), lons = route.coords.map((c) => c[1]);
@@ -422,6 +423,8 @@ async function poisFromTiles(route) {
       .catch(() => []));
   }
   const pts = (await Promise.all(jobs)).flat();
+  // 看板の文字が多そうな場所（お店・飲食店・駅など）だけを数える
+  route.letterSpots = pts.filter(({ props: pr }) => LETTERFUL.has(pr.class)).map(({ lat, lon }) => [+lat.toFixed(5), +lon.toFixed(5)]);
   return tidyPois(route, pts.map(({ props: pr, lat, lon }) => {
     const k = poiKind(tileTags(pr));
     if (!k) return {};
@@ -484,7 +487,7 @@ async function addDetour(poi) {
   const stopIndex = r.stopIndex != null ? (r.stopIndex >= at ? r.stopIndex + 1 : r.stopIndex) : null;
   try {
     const nr = shapeRoute(await osrm(pts), pts, stopIndex);
-    nr.pois = r.pois;
+    nr.pois = r.pois; nr.letterSpots = r.letterSpots;
     if (r.dest) attachDest(nr, r.dest.idx >= at ? r.dest.idx + 1 : r.dest.idx, r.dest);
     if (walk && walk.split && walk.branch && !walk.met) {
       let bi = 0, bd = Infinity;
@@ -1534,6 +1537,7 @@ function onPosition(p) {
     if (walk.branch && !walk.met && prog >= meetAlong - 25) arriveMeet();
   }
 
+  kotobaTick(p);
   // 寄り道先に到着
   if (r.stopAlong != null && !walk.stopArrived && prog >= r.stopAlong - 25) arriveStop();
   // 目的地に到着
@@ -1574,7 +1578,7 @@ function chooseBranch(which) {
       if (e.at <= sp.startAlong) return;
       e.at = e.at <= sp.meetAlongA ? sp.startAlong + (e.at - sp.startAlong) * (sp.lenB / sp.lenA) : e.at + (sp.meetAlongB - sp.meetAlongA);
     });
-    sp.B.pois = walk.route.pois;
+    sp.B.pois = walk.route.pois; sp.B.letterSpots = walk.route.letterSpots;
     walk.route = sp.B;
     walk.alerted = walk.route.turns.map((t, i) => (t.along < walk.progress ? i : -1)).filter((i) => i >= 0);
   }
@@ -1705,9 +1709,7 @@ function updateWalkUI() {
   const ev = walk.events[walk.eventIdx];
   const arrivedOneway = r.dest && r.dest.back === "oneway" && walk.destArrived;
   $("#idleCard").hidden = walk.inbox.length > 0 || walk.resting || arrivedOneway;
-  const left = kotobaLeft(kotobaNow());
-  $("#idleText").textContent = (ev ? `次のお題は ${fmtDist(ev.at - prog)} 先で届きます` : `今日のお題はここまで。${r.dest && !walk.destArrived ? "目的地" : "ゴール"}までの道を楽しんで`)
-    + (left.length ? `。ことば集め：あと${left.map((c) => `「${c}」`).join("")}` : "");
+  $("#idleText").textContent = ev ? `次のお題は ${fmtDist(ev.at - prog)} 先で届きます` : `今日のお題はここまで。${r.dest && !walk.destArrived ? "目的地" : "ゴール"}までの道を楽しんで`;
 }
 
 // 道を外れたときや、散歩中に見どころへ寄るときに、いまいる場所から引き直す
@@ -1728,7 +1730,7 @@ async function reroute(via) {
     const step = remaining.length > 1 ? remaining[1].at - remaining[0].at : 0;
     remaining.forEach((e, i) => (e.at = Math.min(nr.total * 0.9, Math.max(50, shift) + step * i)));
     walk.events = remaining; walk.eventIdx = 0;
-    nr.pois = r.pois;
+    nr.pois = r.pois; nr.letterSpots = r.letterSpots;
     if (r.dest) {
       const di = !walk.destArrived && r.dest.idx >= legIdx + 1 ? r.dest.idx - legIdx + viaPts.length : null;
       nr.dest = { ...r.dest, idx: di, along: di != null ? nr.legEnds[di - 1] : null };
@@ -2113,25 +2115,30 @@ function openBingo() { bingoPick = null; $("#bingoOverlay").hidden = false; rend
 const KOTOBA_IDEAS = ["たこがおこった", "かばのおうさま", "なすにのりたい", "うどんはともだち", "ちくわのあな", "とうふのきもち", "まくらがにげた", "おばけのおやつ", "ねこのかいぎ", "いかのしごと", "だいこんがない", "くつしたのくに", "らくだにきいて", "ひつじがかぞえる"];
 const KOTOBA_ADJ = ["へんな", "ねむい", "まるい", "すっぱい", "さみしい", "えらい", "あやしい", "いそがしい", "はずかしい", "まがった", "ゆるい", "しかくい", "うるさい", "ひまな"];
 const KOTOBA_NOUN = ["いぬ", "ねこ", "たこ", "いか", "かば", "なす", "いす", "かさ", "とうふ", "うどん", "おばけ", "まくら", "ちくわ", "らくだ", "だいこん", "おじさん", "かいだん", "ポスト"];
-let kotobaShuffle = 0;
-function kotobaSuggestions() {
-  const r = rng(Math.floor(Date.now() / 864e5) * 31 + kotobaShuffle);
-  const fixed = shuffle(KOTOBA_IDEAS, r).slice(0, 2);
-  const combos = Array.from({ length: 2 }, () => KOTOBA_ADJ[Math.floor(r() * KOTOBA_ADJ.length)] + KOTOBA_NOUN[Math.floor(r() * KOTOBA_NOUN.length)]);
-  return [...new Set([...combos, ...fixed])];
+// 何ができるかは、完成するまでひみつ。探す文字は1つずつ知らせる（順番もばらばら）
+function randomKotoba() {
+  const r = Math.random;
+  return r() < 0.5 ? KOTOBA_IDEAS[Math.floor(r() * KOTOBA_IDEAS.length)]
+    : KOTOBA_ADJ[Math.floor(r() * KOTOBA_ADJ.length)] + KOTOBA_NOUN[Math.floor(r() * KOTOBA_NOUN.length)];
 }
 const kotobaNow = () => store.get("kotoba", null);
 const kotobaSet = (k) => store.set("kotoba", k);
 const kotobaChars = (phrase) => [...phrase].filter((c) => c.trim());
 let kotobaFor = null;
-function startKotoba(phrase) {
-  phrase = kotobaChars(String(phrase || "")).join("").slice(0, 10);
-  if (!phrase) return toast("ことばを入れてください", true);
-  kotobaSet({ phrase, tiles: {}, startedAt: Date.now() });
+// まだ集めていない文字の番号
+const kotobaOpen = (k) => (k ? kotobaChars(k.phrase).map((_, i) => i).filter((i) => !k.tiles[i]) : []);
+const kotobaLeft = (k) => (k ? kotobaOpen(k).map((i) => kotobaChars(k.phrase)[i]) : []);
+// 次に探す文字を、まだの中から1つ選ぶ（「別の文字にする」でも使う）
+function kotobaNext(k, skip) {
+  const open = kotobaOpen(k).filter((i) => i !== skip);
+  k.target = open.length ? open[Math.floor(Math.random() * open.length)] : kotobaOpen(k)[0] ?? null;
+  return k;
+}
+function startKotoba() {
+  kotobaSet(kotobaNext({ phrase: randomKotoba(), tiles: {}, startedAt: Date.now() }));
   renderKotobaAll();
 }
-// まだ集めていない文字
-const kotobaLeft = (k) => (k ? kotobaChars(k.phrase).map((c, i) => (k.tiles[i] ? null : c)).filter(Boolean) : []);
+const kotobaTargetChar = (k) => (k && k.target != null ? kotobaChars(k.phrase)[k.target] : null);
 
 async function tileImage(t) {
   const p = await idb("photos", "readonly", (s) => s.get(t.photoId));
@@ -2150,49 +2157,47 @@ async function renderKotoba(box) {
   const k = kotobaNow();
   box.innerHTML = "";
   if (!k) {
-    box.appendChild(mkEl("small muted", "集めることばを選んでください。散歩中に、町の看板や張り紙から1文字ずつ撮って集めます"));
+    box.appendChild(mkEl("small muted", "町の看板や張り紙から、1文字ずつ写真に撮って集めます。何ができるかは、完成するまでひみつ。お店の多い場所を歩くと、探す文字が届きます"));
+    const b = document.createElement("button"); b.className = "secondary"; b.textContent = "ことば集めをはじめる";
+    b.onclick = startKotoba;
+    box.appendChild(b);
   } else {
+    const chars = kotobaChars(k.phrase), got = Object.keys(k.tiles).length, c = kotobaTargetChar(k);
+    box.appendChild(mkEl("kotobanow", `いま探している文字：「${c}」`));
+    box.appendChild(mkEl("small muted", `${got}文字あつめました。全部で何文字かも、ひみつです`));
+    // 集めた文字は、順番がわからないようにばらばらに並べる
     const row = mkEl("kotobarow");
-    const chars = kotobaChars(k.phrase);
-    for (let i = 0; i < chars.length; i++) {
-      const t = k.tiles[i];
-      const el = document.createElement(walk && !t ? "label" : "button");
-      el.className = "kotobatile" + (t ? " on" : "");
-      if (t) {
-        drawTile(t, 120).then((cv) => { el.textContent = ""; cv.className = "kotobacv"; el.appendChild(cv); });
-        el.onclick = () => { if (confirm(`「${chars[i]}」の写真を撮り直しますか？`)) { delete k.tiles[i]; kotobaSet(k); renderKotobaAll(); } };
-      } else if (walk) {
-        el.htmlFor = "photoInput";
-        el.addEventListener("click", () => { kotobaFor = i; photoFor = `ことば集め：「${chars[i]}」`; bingoPhotoFor = null; });
-      } else el.onclick = () => toast("散歩中に、この文字を撮って集めます");
-      if (!t) el.textContent = chars[i];
+    shuffle(Object.values(k.tiles), rng(k.startedAt)).forEach((t) => {
+      const el = mkEl("kotobatile on");
+      drawTile(t, 120).then((cv) => { cv.className = "kotobacv"; el.appendChild(cv); });
       row.appendChild(el);
+    });
+    if (got) box.appendChild(row);
+    const acts = mkEl("bingoacts");
+    if (walk) {
+      const shoot = document.createElement("label");
+      shoot.className = "secondary"; shoot.htmlFor = "photoInput"; shoot.textContent = `「${c}」を撮る`;
+      shoot.addEventListener("click", () => { kotobaFor = k.target; photoFor = `ことば集め：「${c}」`; bingoPhotoFor = null; });
+      acts.appendChild(shoot);
     }
-    box.appendChild(row);
-    const left = kotobaLeft(k);
-    box.appendChild(mkEl("small muted", walk ? `文字を押すとカメラが開きます。あと${left.length}文字` : `あと${left.length}文字。散歩中に、文字を押して撮ります`));
+    if (kotobaOpen(k).length > 1) {
+      const other = document.createElement("button"); other.className = "link"; other.textContent = "別の文字にする";
+      other.onclick = () => { kotobaSet(kotobaNext(k, k.target)); renderKotobaAll(); if (walk) { walk.kotobaAt = 0; renderCard(); } };
+      acts.appendChild(other);
+    }
+    const quit = document.createElement("button"); quit.className = "link"; quit.textContent = "やめる";
+    quit.onclick = () => { if (confirm("ことば集めをやめますか？集めた文字は消えます")) { kotobaSet(null); renderKotobaAll(); } };
+    acts.appendChild(quit);
+    box.appendChild(acts);
   }
-  // ことばを選ぶ
-  const pick = mkEl("kotobapick");
-  kotobaSuggestions().forEach((w) => {
-    const b = document.createElement("button"); b.className = "chip"; b.textContent = w;
-    b.onclick = () => { if (!k || !Object.keys(k.tiles).length || confirm(`「${w}」に変えますか？いま集めている文字は消えます`)) startKotoba(w); };
-    pick.appendChild(b);
-  });
-  const own = document.createElement("button"); own.className = "chip"; own.textContent = "自分で決める";
-  own.onclick = () => { const w = prompt("集めることば（10文字まで）", ""); if (w) startKotoba(w); };
-  pick.appendChild(own);
-  const more = document.createElement("button"); more.className = "chip"; more.textContent = "ほかの案";
-  more.onclick = () => { kotobaShuffle++; renderKotobaAll(); };
-  pick.appendChild(more);
-  box.appendChild(pick);
   // できあがったことば
   const done = store.get("kotobaDone", []);
   if (done.length) {
+    box.appendChild(mkEl("itemlabel", "できあがったことば"));
     const list = mkEl("kotobadone");
     done.slice().reverse().forEach((d) => {
-      const b = document.createElement("button"); b.className = "link"; b.textContent = `「${d.phrase}」の画像`;
-      b.onclick = () => saveKotobaCollage(d);
+      const b = document.createElement("button"); b.className = "link"; b.textContent = `「${d.phrase}」`;
+      b.onclick = () => revealKotoba(d);
       list.appendChild(b);
     });
     box.appendChild(list);
@@ -2203,6 +2208,21 @@ function renderKotobaAll() {
   if (!$("#kotobaOverlay").hidden) renderKotoba($("#kotobaWalk"));
 }
 function openKotoba() { $("#kotobaOverlay").hidden = false; renderKotobaAll(); }
+
+// お店や駅が多い場所か（看板の文字が見つけやすい）。地図データのお店の数で決める
+const SHOP_NEAR = 150, SHOP_MIN = 12;
+const nearShops = (route, p) => (route.letterSpots || []).filter((q) => dist(p, q) < SHOP_NEAR).length >= SHOP_MIN;
+// 散歩中：お店の多い場所に来たら、探す文字を知らせる（10分に1回まで）
+function kotobaTick(p) {
+  const k = kotobaNow();
+  if (!k || k.target == null || !walk || walk.resting) return;
+  const now = Date.now(), gap = 10 * 60000 / (walk.sim ? SIM_SPEED : 1);
+  if (now - (walk.kotobaAt || 0) < gap || walk.inbox.some((m) => m.kind === "kotoba")) return;
+  if (!nearShops(walk.route, p)) return;
+  walk.kotobaAt = now;
+  walk.inbox.push({ kind: "kotoba", id: "kotoba" + now, text: `このあたりは看板が多い場所です。ことば集めの文字「${kotobaTargetChar(k)}」を探して撮ろう`, arrivedAt: now });
+  buzz([80, 60, 80]); renderCard();
+}
 
 // 撮った写真の中で、文字のところを押して切り抜く
 function openCrop(photoId, blob, idx) {
@@ -2219,25 +2239,50 @@ function openCrop(photoId, blob, idx) {
   size.oninput = place;
   $("#cropOk").onclick = () => {
     const k = kotobaNow();
-    if (k) { k.tiles[idx] = { photoId, cx, cy, size: +size.value / 100 }; kotobaSet(k); }
+    if (k) { k.tiles[idx] = { photoId, cx, cy, size: +size.value / 100 }; kotobaSet(kotobaNext(k)); }
     ov.hidden = true; URL.revokeObjectURL(url);
-    kotobaCheckDone();
+    // 届いていた「ことば集め」のカードは片づける
+    if (walk) { walk.inbox = walk.inbox.filter((m) => m.kind !== "kotoba"); walk.kotobaAt = Date.now(); renderCard(); saveActive(); }
+    if (!kotobaCheckDone()) { const c = kotobaTargetChar(kotobaNow()); toast(`1文字あつめました。次は「${c}」`); }
     renderKotobaAll();
   };
   ov.hidden = false;
 }
 function kotobaCheckDone() {
   const k = kotobaNow();
-  if (!k || kotobaLeft(k).length) return;
+  if (!k || kotobaOpen(k).length) return false;
   const d = { phrase: k.phrase, tiles: k.tiles, at: Date.now() };
   store.set("kotobaDone", [...store.get("kotobaDone", []), d]);
   kotobaSet(null);
   buzz([100, 60, 100, 60, 300]);
-  toast(`「${d.phrase}」が完成しました！`);
-  saveKotobaCollage(d);
+  revealKotoba(d, true);
+  return true;
 }
+// 完成したことばを見せる。はじめて見るときは「何ができたかな…」と少しためる
+async function revealKotoba(d, first) {
+  const ov = $("#kotobaReveal");
+  $("#revealTitle").textContent = first ? "何ができたかな…" : `「${d.phrase}」`;
+  $("#revealImg").hidden = true;
+  ov.hidden = false;
+  const blob = await kotobaCollage(d);
+  const url = blobUrl(blob);
+  if (first) await new Promise((r) => setTimeout(r, 1500));
+  $("#revealImg").src = url; $("#revealImg").hidden = false;
+  $("#revealTitle").textContent = `「${d.phrase}」ができました！`;
+  $("#revealSave").onclick = () => shareImage(blob, `futari-sanpo-${d.phrase}.jpg`, d.phrase);
+}
+async function shareImage(blob, name, title) {
+  const file = new File([blob], name, { type: "image/jpeg" });
+  try {
+    if (navigator.canShare && navigator.canShare({ files: [file] })) { await navigator.share({ files: [file], title }); return; }
+  } catch (e) { if (e.name === "AbortError") return; }
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob); a.download = name; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+}
+
 // 切り抜いた文字を、少しずつ傾けて並べる（5文字ごとに改行）
-async function saveKotobaCollage(d) {
+async function kotobaCollage(d) {
   const chars = kotobaChars(d.phrase), per = Math.min(5, chars.length), rows = Math.ceil(chars.length / per);
   const T = 220, gap = 26, pad = 60, W = pad * 2 + per * T + (per - 1) * gap, H = pad * 2 + rows * T + (rows - 1) * gap + 70;
   const cv = document.createElement("canvas"); cv.width = W; cv.height = H;
@@ -2260,14 +2305,7 @@ async function saveKotobaCollage(d) {
   const dt = new Date(d.at);
   g.fillStyle = "#555"; g.font = "400 26px 'IBM Plex Mono', monospace"; g.textAlign = "right"; g.textBaseline = "alphabetic";
   g.fillText(`${dt.getFullYear()}.${dt.getMonth() + 1}.${dt.getDate()}  ふたり散歩`, W - pad, H - 30);
-  const blob = await new Promise((res) => cv.toBlob(res, "image/jpeg", 0.9));
-  const file = new File([blob], `futari-sanpo-${d.phrase}.jpg`, { type: "image/jpeg" });
-  try {
-    if (navigator.canShare && navigator.canShare({ files: [file] })) { await navigator.share({ files: [file], title: d.phrase }); return; }
-  } catch (e) { if (e.name === "AbortError") return; }
-  const a = document.createElement("a");
-  a.href = URL.createObjectURL(blob); a.download = file.name; a.click();
-  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  return new Promise((res) => cv.toBlob(res, "image/jpeg", 0.9));
 }
 
 // ---------- 一年のふりかえり ----------
@@ -2708,7 +2746,12 @@ function init() {
   // カメラは<label for>で開く（iPhoneでいちばん確実な開き方）。開く前にどのお題の写真かを覚えておく
   $("#btnShoot").addEventListener("click", () => { photoFor = walk && walk.inbox[0] ? walk.inbox[0].text : null; });
   $("#btnFree").addEventListener("click", () => { photoFor = null; bingoPhotoFor = null; kotobaFor = null; });
-  $("#btnShoot").addEventListener("click", () => { bingoPhotoFor = null; kotobaFor = null; });
+  $("#btnShoot").addEventListener("click", () => {
+    bingoPhotoFor = null; kotobaFor = null;
+    const m = walk && walk.inbox[0], k = kotobaNow();
+    if (m && m.kind === "kotoba" && k) { kotobaFor = k.target; photoFor = `ことば集め：「${kotobaTargetChar(k)}」`; }
+  });
+  $("#revealClose").onclick = () => { $("#kotobaReveal").hidden = true; };
   $("#btnKotoba").onclick = openKotoba;
   $("#btnKotobaClose").onclick = () => { $("#kotobaOverlay").hidden = true; };
   $("#cropCancel").onclick = () => { $("#cropOverlay").hidden = true; };

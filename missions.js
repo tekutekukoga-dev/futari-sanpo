@@ -12,7 +12,8 @@ KINDS.choose = { label: "分かれ道", done: "", shoot: false };
 KINDS.letter = { label: "手紙", done: "読んだ", shoot: false };
 // 記録に残さない、お知らせだけのカード
 KINDS.dest = { label: "目的地", done: "OK", shoot: false };
-const INFO_KINDS = ["theme", "split", "choose", "letter", "dest"];
+KINDS.kotoba = { label: "ことば集め", done: "あとで", shoot: true };
+const INFO_KINDS = ["theme", "split", "choose", "letter", "dest", "kotoba"];
 
 // 今日のテーマ。観察のお題のうち、テーマに合うものを多めに出す
 const THEMES = {
