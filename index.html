@@ -10,7 +10,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+JP:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
 <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
-<link rel="stylesheet" href="style.css?v=32">
+<link rel="stylesheet" href="style.css?v=35">
 </head>
 <body>
 
@@ -26,9 +26,14 @@
     <p class="maphint" id="mapHint">地図をタップすると、そこをスタート地点にできます</p>
   </div>
 
-  <div id="sharedBanner" class="note" hidden>パートナーから届いたルートです。下の「出発する」を押してください。</div>
+  <div id="planInbox" class="note inbox" hidden><span id="planInboxText"></span><button id="btnPlanInbox" class="primary">開く</button></div>
+  <div id="sharedBanner" class="note" hidden>パートナーから届いたルートです。下の「出発する」を押してください。<button id="btnOwnRoute" class="link">自分でルートを作る</button></div>
 
   <div id="planForm" class="group">
+    <div class="item col">
+      <span class="itemlabel">だれと歩く</span>
+      <div class="seg" id="segParty"><button data-v="duo">ふたりで</button><button data-v="solo">ひとりで</button></div>
+    </div>
     <div class="item">
       <span class="itemlabel">スタート地点</span>
       <div class="itemvalue">
@@ -64,11 +69,17 @@
       </div>
       <div id="candidates" class="candidates"></div>
     </div>
+    <div class="item col" id="itemMeguri">
+      <span class="itemlabel">めぐり（好きなものを通る）</span>
+      <div class="seg wrap" id="segMeguri"><button data-v="none">なし</button><button data-v="ankyo">暗渠</button><button data-v="fudo">不動明王</button><button data-v="tree">名木・巨樹</button></div>
+      <div id="meguriInfo" class="meguriinfo" hidden></div>
+    </div>
     <div class="item col" id="itemSplit">
       <span class="itemlabel">別行動（途中で二手に分かれて、合流する）</span>
       <div class="seg" id="segSplit">
         <button data-v="0">しない</button><button data-v="10">10分</button><button data-v="15">15分</button><button data-v="20">20分</button>
       </div>
+      <p id="splitDestNote" class="small muted" hidden>目的地モードでは、途中で二手に分かれて、目的地で合流します</p>
       <div id="meetBox" class="meetbox" hidden>
         <span class="itemlabel">合流場所</span>
         <div class="seg wrap" id="segMeet">
@@ -99,6 +110,7 @@
     </div>
   </div>
   <button id="btnMake" class="primary">ルートを作る</button>
+  <button id="btnPaste" class="link pastelink">パートナーから届いたリンクを開く</button>
   <p id="planError" class="error" hidden></p>
 
   <div class="group" id="routeSummary" hidden>
@@ -153,7 +165,7 @@
       <button class="iconbtn" id="btnHelp2" aria-label="使い方">？</button>
     </div>
     <label class="fab" for="photoInput" id="btnFree" aria-label="写真を撮る">
-      <svg viewBox="0 0 24 24" width="26" height="26" aria-hidden="true"><path fill="currentColor" d="M9 4l-1.5 2H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-3.5L15 4H9zm3 4.5a4.5 4.5 0 1 1 0 9 4.5 4.5 0 0 1 0-9zm0 2a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5z"/></svg>
+      <svg viewBox="0 0 24 24" width="26" height="26" aria-hidden="true"><path fill="currentColor" d="M9 4l-1.5 2H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-3.5L15 4H9zm3 4.5a4.5 4.5 0 1 1 0 9 4.5 4.5 0 0 1 0-9zm0 2a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5z"/></svg><span>撮る</span>
     </label>
   </div>
 
@@ -215,11 +227,25 @@
     <div id="reviewBtns" class="actions"></div>
   </div>
   <div class="group bingocard">
+    <span class="itemlabel">まち図鑑</span>
+    <div id="zukanBox"></div>
+  </div>
+  <div class="group bingocard">
     <span class="itemlabel">ことば集め</span>
     <div id="kotobaAlbum"></div>
   </div>
   <div class="group bingocard">
     <span class="itemlabel" id="bingoMonth">今月のビンゴ</span>
+    <details class="bingorules" id="bingoRules">
+      <summary>ビンゴのあそびかた</summary>
+      <ol>
+        <li>毎月1日に、新しいカードが配られます。種類（いつもの・色・かたち・数字・昭和・生きもの）は選べます</li>
+        <li>散歩中に、マスに書かれたものを見つけたら、そのマスを押して埋めます。写真で埋めても、押すだけでもOK。散歩画面の「ビンゴ」ボタンからも開けます</li>
+        <li>まん中の「散歩に出かける」は、散歩を終えると自動で埋まります</li>
+        <li>たて・よこ・ななめに3つ並んだら「ビンゴ！」。下に書いた「ごほうび」が解禁です</li>
+        <li>9マスぜんぶ写真で埋めると、その月の写真集（1枚の画像）ができます</li>
+      </ol>
+    </details>
     <div class="seg wrap bingokind"><button data-v="normal">いつもの</button><button data-v="color">色</button><button data-v="shape">かたち</button><button data-v="number">数字</button><button data-v="retro">昭和</button><button data-v="life">生きもの</button></div>
     <div id="bingoAlbum"></div>
     <label class="itemlabel" for="bingoReward">ビンゴしたら、ふたりで</label>
@@ -346,8 +372,8 @@
 <div id="updateBar" class="updatebar" hidden><span>新しい版があります</span><button id="btnUpdate" class="primary">更新する</button></div>
 
 <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
-<script src="missions.js?v=32"></script>
-<script src="badges.js?v=32"></script>
-<script src="app.js?v=32"></script>
+<script src="missions.js?v=35"></script>
+<script src="badges.js?v=35"></script>
+<script src="app.js?v=35"></script>
 </body>
 </html>

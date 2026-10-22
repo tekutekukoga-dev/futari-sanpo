@@ -15,7 +15,7 @@ const TITLES = [
 
 // バッジの分類（アルバムでは分類ごとに並べる）
 const BADGE_CATS = {
-  dist: "歩いた距離", count: "散歩の回数", look: "観察", talk: "会話のタネ", photo: "写真とメモ",
+  dist: "歩いた距離", count: "散歩の回数", look: "観察", photo: "写真とメモ",
   stop: "寄り道と目的地", time: "時間と季節", weather: "天気とテーマ", streak: "続ける", special: "特別な日", secret: "ひみつ",
 };
 
@@ -57,17 +57,10 @@ const BADGES = [
   b("look", "day5", "豊", "気づきの多い日", "1回の散歩で5つ以上クリア", 5, (s) => s.maxDone),
   b("look", "day10", "宝", "宝さがしの日", "1回の散歩で10以上クリア", 10, (s) => s.maxDone),
   // 会話
-  b("talk", "talk10", "話", "語り合い", "会話のタネで10回話す", 10, (s) => s.talks),
-  b("talk", "talk30", "語", "夜通し語れる", "会話のタネで30回話す", 30, (s) => s.talks),
-  b("talk", "talk60", "縁", "話が尽きない", "会話のタネで60回話す", 60, (s) => s.talks),
-  b("talk", "talk100", "絆", "百の会話", "会話のタネで100回話す", 100, (s) => s.talks),
-  b("talk", "philo", "哲", "散歩の哲学", "「ちょっと哲学」で5回話す", 5, (s) => s.cats.philo || 0),
-  b("talk", "philo20", "思", "考える葦", "「ちょっと哲学」で20回話す", 20, (s) => s.cats.philo || 0),
-  b("talk", "past", "昔", "思い出係", "「むかし話」で5回話す", 5, (s) => s.cats.past || 0),
-  b("talk", "past20", "史", "ふたりの歴史家", "「むかし話」で20回話す", 20, (s) => s.cats.past || 0),
-  b("talk", "us", "心", "ふたりの理解者", "「ふたりのこと」で5回話す", 5, (s) => s.cats.us || 0),
-  b("talk", "us20", "愛", "以心伝心", "「ふたりのこと」で20回話す", 20, (s) => s.cats.us || 0),
   // 写真とメモ
+  b("photo", "pm10", "構", "写真のお題10", "写真のお題を10回クリア", 10, (s) => s.photoMissions),
+  b("photo", "pm30", "画", "写真の目", "写真のお題を30回クリア", 30, (s) => s.photoMissions),
+  b("photo", "pm100", "眺", "散歩写真家", "写真のお題を100回クリア", 100, (s) => s.photoMissions),
   b("photo", "photo1", "撮", "はじめての1枚", "写真を1枚撮る", 1, (s) => s.photos),
   b("photo", "photo10", "写", "撮影係", "写真を合計10枚撮る", 10, (s) => s.photos),
   b("photo", "photo50", "匠", "散歩カメラマン", "写真を合計50枚撮る", 50, (s) => s.photos),
@@ -126,6 +119,16 @@ const BADGES = [
   b("streak", "bingoFull", "九", "写真集の完成", "ビンゴのカードを9マス全部うめる", 1, (s) => s.bingoFulls),
   b("streak", "kotoba1", "言", "ことば職人", "ことば集めで、ことばを1つ完成させる", 1, (s) => s.kotoba),
   b("streak", "kotoba5", "文", "町の文筆家", "ことば集めで、ことばを5つ完成させる", 5, (s) => s.kotoba),
+  // まち図鑑とめぐり
+  b("stop", "zukan10", "鑑", "まち図鑑10", "まち図鑑に10か所あつめる", 10, (s) => s.zukan),
+  b("stop", "zukan30", "冊", "まち図鑑30", "まち図鑑に30か所あつめる", 30, (s) => s.zukan),
+  b("stop", "zukan100", "名", "わたしたちの百名所", "まち図鑑に100か所あつめる", 100, (s) => s.zukan),
+  b("stop", "fudo1", "剣", "お不動さんに会う", "まち図鑑に不動明王を1つ入れる", 1, (s) => s.zukanCat.fudo || 0),
+  b("stop", "fudo5", "炎", "お不動さんめぐり", "まち図鑑に不動明王を5つ入れる", 5, (s) => s.zukanCat.fudo || 0),
+  b("stop", "goshiki", "尊", "江戸五色不動", "目黒・目白・目赤・目青・目黄のお不動さんを全部あつめる", 5, (s) => s.goshiki),
+  b("stop", "ankyo1", "渠", "暗渠さんぽ", "暗渠を歩いて、まち図鑑に入れる", 1, (s) => s.zukanCat.ankyo || 0),
+  b("stop", "ankyo5", "川", "見えない川の地図", "5本のちがう暗渠を歩く", 5, (s) => s.zukanCat.ankyo || 0),
+  b("stop", "tree5", "樹", "木を見る人", "まち図鑑に名木・巨樹を5本入れる", 5, (s) => s.zukanCat.tree || 0),
   // 特別な日
   b("special", "newyear", "賀", "初さんぽ", "1月1日に散歩する", 1, (s) => s.days.has("0101") ? 1 : 0),
   b("special", "setsubun", "福", "節分さんぽ", "2月3日に散歩する", 1, (s) => s.days.has("0203") ? 1 : 0),
@@ -153,7 +156,7 @@ function longestRun(nums) {
 function badgeStats(walks) {
   const list = walks.filter((w) => !w.sim && w.results).sort((a, b) => a.startedAt - b.startedAt);
   const s = {
-    walks: list.length, km: 0, maxKm: 0, totalMin: 0, maxMin: 0, pts: 0, maxDone: 0, looks: 0, talks: 0, cats: {}, fulls: 0, photos: 0, memos: 0,
+    walks: list.length, km: 0, maxKm: 0, totalMin: 0, maxMin: 0, pts: 0, maxDone: 0, looks: 0, talks: 0, photoMissions: 0, cats: {}, fulls: 0, photos: 0, memos: 0,
     stopType: {}, detours: 0, dests: 0, oneways: 0, splits: 0, mornings: 0, dawns: 0, nights: 0, lates: 0, weekends: 0,
     weather: {}, days: new Set(), zorome: 0, clockZorome: 0, fri13: 0, shorts: 0, silents: 0,
   };
@@ -192,6 +195,7 @@ function badgeStats(walks) {
     const done = w.results.filter((r) => r.outcome === "done");
     done.forEach((r) => {
       if (r.kind === "look") s.looks++;
+      if (r.kind === "photo") s.photoMissions++;
       if (r.kind === "talk") { s.talks++; s.cats[r.cat] = (s.cats[r.cat] || 0) + 1; }
       if (r.memo) s.memos++;
     });
@@ -212,6 +216,12 @@ function badgeStats(walks) {
   // 週は月曜はじまり（1970/1/1は木曜なので、3日ずらす）
   const bt = typeof bingoTotals === "function" ? bingoTotals() : { lines: 0, fulls: 0 };
   s.bingoLines = bt.lines; s.bingoFulls = bt.fulls;
+  try {
+    const z = JSON.parse(localStorage.getItem("fs:zukan")) || [];
+    s.zukan = z.length; s.zukanCat = {};
+    z.forEach((x) => (s.zukanCat[x.cat] = (s.zukanCat[x.cat] || 0) + 1));
+    s.goshiki = typeof GOSHIKI !== "undefined" ? GOSHIKI.filter((c) => z.some((x) => x.cat === "fudo" && c.re.test(x.name))).length : 0;
+  } catch { s.zukan = 0; s.zukanCat = {}; s.goshiki = 0; }
   try { s.kotoba = (JSON.parse(localStorage.getItem("fs:kotobaDone")) || []).length; } catch { s.kotoba = 0; }
   s.streakWeeks = longestRun(dayNums.map((n) => Math.floor((n + 3) / 7)));
   return s;

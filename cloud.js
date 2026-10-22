@@ -360,7 +360,7 @@ window.Cloud = (() => {
     const body = document.createElement("div");
     el.appendChild(body);
     const show = (text) => {
-      body.innerHTML = text ? `<p class="diarytext"></p><button class="link small">書き直してもらう</button>` : `<p class="small muted">この一年の記録から、AIが短いふりかえりを書きます。</p><div class="actions"><button class="secondary">AIに一年の日記を書いてもらう</button></div>`;
+      body.innerHTML = text ? `<p class="diarytext"></p><button class="link small">書き直してもらう</button>` : `<p class="small muted">この一年の記録をもとに、AIがへんてこな一年の物語を書きます。</p><div class="actions"><button class="secondary">AIに一年の物語を書いてもらう</button></div>`;
       if (text) body.querySelector(".diarytext").textContent = text;
       body.querySelector("button").onclick = async (e) => {
         e.target.disabled = true; e.target.textContent = "書いています…（30秒ほど）";
@@ -378,10 +378,10 @@ window.Cloud = (() => {
     if (group[0].sim || (!text && !ready())) { el.hidden = true; return; }
     el.hidden = false;
     if (text) {
-      el.innerHTML = `<span class="itemlabel">散歩日記</span><p class="diarytext"></p><button class="link small" id="btnDiary">書き直してもらう</button>`;
+      el.innerHTML = `<span class="itemlabel">散歩のへんな物語</span><p class="diarytext"></p><button class="link small" id="btnDiary">書き直してもらう</button>`;
       el.querySelector(".diarytext").textContent = text;
     } else {
-      el.innerHTML = `<span class="itemlabel">散歩日記</span><p class="small muted">ルート・寄り道・メモ・写真から、AIが短い日記を書きます。</p><div class="actions"><button class="secondary" id="btnDiary">AIに日記を書いてもらう</button></div>`;
+      el.innerHTML = `<span class="itemlabel">散歩のへんな物語</span><p class="small muted">ルート・寄り道・メモ・写真をもとに、AIがへんてこな物語を書きます（ちょっと話を盛ります）。</p><div class="actions"><button class="secondary" id="btnDiary">AIに物語を書いてもらう</button></div>`;
     }
     el.querySelector("#btnDiary").onclick = async (e) => {
       e.target.disabled = true; e.target.textContent = "書いています…（10秒ほど）";
@@ -405,7 +405,7 @@ window.Cloud = (() => {
         weather: plan.weather ? `${plan.weather.label}・${plan.weather.temp}℃` : "",
         night: isNightWalk(Date.now(), route.total / WALK_SPEED / 60, plan.home),
         theme: tk ? THEMES[tk].label : "", stop: plan.chosen && plan.stop !== "none" ? plan.chosen.name : "",
-        meet: route.split ? route.split.meetName : "",
+        meet: route.split ? route.split.meetName : "", solo: plan.party === "solo",
         places: (route.pois || []).slice(0, 10).map((p) => ({ name: p.name, label: p.label })),
       } }).then((r) => r.missions || []).catch(() => { delete aiCache[key]; return []; });
     }
@@ -415,12 +415,12 @@ window.Cloud = (() => {
   function applyMissions(w, list) {
     const rest = w.events.slice(w.eventIdx).filter((e) => e.id !== "final" && !e.ai);
     let used = 0;
-    ["look", "talk"].forEach((kind) => {
+    ["look", "photo"].forEach((kind) => {
       const slots = rest.filter((e) => e.kind === kind);
       list.filter((m) => m.kind === kind).forEach((m, i) => {
         const e = slots[Math.min(slots.length - 1, 1 + i * 2)];
         if (!e || e.ai) return;
-        Object.assign(e, { text: m.text, tip: m.tip || undefined, cat: kind === "talk" ? "us" : undefined, label: "AIのお題", ai: true });
+        Object.assign(e, { text: m.text, tip: m.tip || undefined, label: "AIのお題", ai: true });
         used++;
       });
     });
@@ -447,12 +447,39 @@ window.Cloud = (() => {
   }
   function stopSharing() { if (partnerMarker) { partnerMarker.remove(); partnerMarker = null; } }
 
+  // ---------- ルートを相手のアプリに届ける ----------
+  // 「パートナーに送る」で、ルートをサーバーに置いて相手に通知する。相手はホーム画面のアプリを開くだけで受け取れる
+  const partnerName = () => { const o = me?.pair?.members?.find((m) => !m.me); return o?.name || ""; };
+  async function sendPlan(payload) {
+    await api("/plan", { method: "POST", body: { payload } });
+  }
+  let lastPlanCheck = 0;
+  async function checkPlan() {
+    if (!ready() || Date.now() - lastPlanCheck < 15000) return;
+    lastPlanCheck = Date.now();
+    try {
+      const r = await api("/plan");
+      if (!r.payload || r.from === myId() || r.at <= ls.get("planSeen", 0) || Date.now() - r.at > 6 * 3600e3) return;
+      if (typeof walk !== "undefined" && walk) return;
+      const t = new Date(r.at).toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit" });
+      document.getElementById("planInboxText").textContent = `${r.fromName || "パートナー"}から散歩のルートが届いています（${t}）`;
+      document.getElementById("planInbox").hidden = false;
+      document.getElementById("btnPlanInbox").onclick = () => {
+        ls.set("planSeen", r.at);
+        document.getElementById("planInbox").hidden = true;
+        openSharedPayload(r.payload);
+      };
+    } catch {}
+  }
   function init() {
+    // アプリを開いたとき・戻ってきたときに、届いたルートがないか見る
+    checkPlan();
+    document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") checkPlan(); });
     // ページのタイトルに「ふたり用」と出して、一般公開版と見分けられるようにする
     const logo = document.querySelector(".logo");
     if (logo && !logo.querySelector(".edition")) logo.insertAdjacentHTML("beforeend", '<span class="edition">ふたり用</span>');
     if (ready()) sync().then((ch) => ch && !document.getElementById("view-album").hidden && renderAlbum());
     if (ls.get("pushOn", false) && "serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
   }
-  return { init, sync, renderBox, ready, myId, nameOf, openLetters, event, renderLetter, diary, renderDiary, shareWhileApart, stopSharing, missionsFor, applyMissions, renderYear };
+  return { init, sync, renderBox, ready, myId, nameOf, openLetters, event, renderLetter, diary, renderDiary, shareWhileApart, stopSharing, missionsFor, applyMissions, renderYear, sendPlan, checkPlan, partnerName };
 })();

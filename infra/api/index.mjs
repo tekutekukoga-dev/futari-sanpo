@@ -9,6 +9,7 @@
 //   PAIR#{pair} / PHOTO#{walk}#{id}#{at}  写真の情報（本体はS3）
 //   PAIR#{pair} / DIARY#{key}        AI散歩日記（key は二人の散歩で共通のルート番号）
 //   PAIR#{pair} / LETTER#{to}#{at}   相手への手紙（相手の次の散歩で開く）
+//   PAIR#{pair} / PLAN               相手に送った散歩のルート（12時間で自動削除）
 //   PAIR#{pair} / REVIEW#{year}       AIの一年の散歩日記
 //   PAIR#{pair} / AIM#{key}          AIのお題（二人で同じものを使う。2日で自動削除）
 //   USER#{id}   / PUSH#{hash}        通知の送り先（ブラウザごと）
@@ -49,6 +50,8 @@ export const handler = async (event) => {
     if (method === "GET" && path === "/walks") return json(200, await listWalks(sub));
     if (method === "PUT" && path.startsWith("/walks/")) return json(200, await saveWalk(sub, decodeURIComponent(path.slice(7)), body));
     if (method === "POST" && path === "/photos") return json(200, await newPhoto(sub, body));
+    if (method === "POST" && path === "/plan") return json(200, await sendPlan(sub, body));
+    if (method === "GET" && path === "/plan") return json(200, await readPlan(sub));
     if (method === "POST" && path === "/fineday") return json(200, await setFineDay(sub, body));
     if (method === "POST" && path === "/push/subscribe") return json(200, await subscribePush(sub, body));
     if (method === "POST" && path === "/events") return json(200, await walkEvent(sub, body));
@@ -265,6 +268,24 @@ async function sendPush(target, text) {
   });
   return res.status;
 }
+// ---------- 散歩のルートを相手に届ける ----------
+async function sendPlan(sub, b) {
+  const pairId = await pairOf(sub);
+  const payload = String(b.payload || "");
+  if (!payload || payload.length > 20000) throw fail(400, "ルートが正しくありません");
+  try { JSON.parse(payload); } catch { throw fail(400, "ルートが正しくありません"); }
+  const at = Date.now();
+  await ddb.send(new PutCommand({ TableName: TABLE, Item: { pk: `PAIR#${pairId}`, sk: "PLAN", payload, from: sub, at, ttl: Math.floor(at / 1000) + 12 * 3600 } }));
+  await notifyPartner(sub, pairId, "plan", (name) => ({ title: "散歩のルートが届きました", body: `${name}から届きました。アプリを開くと、同じルートで歩けます`, tag: "plan", url: "./" }));
+  return { ok: true, at };
+}
+async function readPlan(sub) {
+  const pairId = await pairOf(sub);
+  const item = await getItem(`PAIR#${pairId}`, "PLAN");
+  if (!item) return {};
+  return { payload: item.payload, from: item.from, at: item.at, fromName: (await profile(item.from))?.name || "" };
+}
+
 // ---------- 散歩日和の知らせ（前日20時と当日8時） ----------
 // 位置は小数2けた（約1km）に丸めたものだけを預かる
 async function setFineDay(sub, b) {
@@ -422,19 +443,19 @@ async function writeDiary(sub, b) {
   }
   const res = await converse({
     system: [{ text: [
-      "あなたは、夫婦の散歩の記録から、短い散歩日記を書く書き手です。",
-      "書き方：やわらかい常体（〜した。〜だった。）。本文は150〜220字。見出しや箇条書きは使わず、ひとつながりの文章にする。",
+      "あなたは、散歩の記録をもとに、ナンセンスで愉快な短い物語を書く作家です。",
+      "散歩のルート・寄り道先・見つけたもの・メモ・写真を「素材」にして、現実から少しずつずれていく、へんてこな物語にする。",
+      "書き方：やわらかい常体。本文は200〜320字。ひとつながりの文章で、見出しや箇条書きは使わない。",
+      "やっていいこと：実際にはなかった出来事や会話を足してよい（面白くなるなら）。物や動物がしゃべってもよい。話が大げさになってもよい。最後は少しとぼけたオチで終える。",
       "守ること：",
-      "- 記録と写真にあることだけを書く。記録にない出来事・会話・気持ち・歴史や由来の説明を足さない。",
-      "- 「ふたりで歩いた」記録のときは「ふたりで」と書き、名前は記録にある呼び名を使う。一人の記録のときは、その人の目線で書く。",
-      "- 距離や時間は「4.6km」「58分」のように数字で書く。",
-      "- 朝・昼・夕方・夜などの時間帯は、記録の出発時刻と合うときだけ書く。迷ったら書かない。",
-      "- 「〜することができた」「改めて感じられた」のような硬い言い回しや、大げさな表現は使わない。",
-      "- お題の文章をそのまま書き写さず、メモの言葉を生かして書く。",
-      "最後に改行して「今日のひとこと：」で始まる20字以内の一文を添える。",
+      "- 記録にある具体的なもの（場所の名前・見つけたもの・メモの言葉・写真に写っているもの）を少なくとも3つ物語に入れる。どれが本当でどれが作り話か、読んで楽しめるくらいに。",
+      "- 歩いた人は、記録にある呼び名で登場させる。",
+      "- 人を傷つける話、怖すぎる話、下品な話にはしない。実在のお店や人を悪く書かない。",
+      "- 「〜することができた」のような硬い言い回しは使わない。",
+      "最後に改行して「今日の教訓：」で始まる、役に立たない20字以内の一文を添える。",
     ].join("\n") }],
     messages: [{ role: "user", content: [...images, { text: `今日の散歩の記録です。写真は${images.length}枚あります。\n${lines.join("\n")}` }] }],
-    inferenceConfig: { maxTokens: 700, temperature: 0.7 },
+    inferenceConfig: { maxTokens: 800, temperature: 1 },
   });
   const text = res.output?.message?.content?.map((c) => c.text || "").join("").trim();
   if (!text) throw fail(502, "日記を書けませんでした。少し待ってからもう一度お試しください");
@@ -511,10 +532,10 @@ async function writeYearReview(sub, b) {
   const names = await Promise.all((p?.members || []).map(async (id) => (await profile(id))?.name || "あいて"));
   const res = await converse({
     system: [{ text: [
-      "あなたは、夫婦の一年間の散歩の記録から、一年をふりかえる短い文章を書く書き手です。",
+      "あなたは、夫婦の一年間の散歩の記録から、一年をふりかえる、ちょっとナンセンスで愉快な物語を書く作家です。実際になかった出来事を足しても、面白ければかまいません。",
       "書き方：やわらかい常体。本文は300〜420字。見出しや箇条書きは使わず、2〜3段落の文章にする。",
       "守ること：",
-      "- 記録にあることだけを書く。記録にない出来事・気持ち・場所の説明を足さない。",
+      "- 記録にある数字や場所・メモを少なくとも4つ物語に入れる。",
       `- 二人の呼び名は「${names.join("」と「")}」。「ふたりで」と書いてよい。`,
       "- 数字は記録のとおりに書く。季節の移り変わりは、月ごとの距離やメモから読み取れるときだけ書く。",
       "- 大げさな表現や「〜することができた」のような硬い言い回しは使わない。",
@@ -557,18 +578,19 @@ async function aiMissions(sub, b) {
     `季節：${clean(b.season, 6)}`, b.weather ? `天気：${clean(b.weather, 20)}` : "", b.night ? "日が暮れてからの散歩" : "",
     b.theme ? `今日のテーマ：${clean(b.theme, 12)}` : "", b.stop ? `寄り道先：${clean(b.stop, 40)}` : "", b.meet ? `二手に分かれて合流する場所：${clean(b.meet, 40)}` : "",
     places.length ? `ルート沿いにある場所：${places.join("、")}` : "",
+    b.solo ? "ひとりで歩く散歩（ふたりでするお題は作らない）" : "",
   ].filter(Boolean);
   const res = await converse({
     system: [{ text: [
-      "あなたは、夫婦の散歩アプリのお題を作る係です。お題は、ふだん見過ごしている細部に目を向けさせる「観察」が中心です。",
-      "与えられた場所や季節・天気・テーマにちなんだ、その日だけのお題を4つ作る。3つは観察（look）、1つは二人で話す会話のタネ（talk）。",
+      "あなたは、散歩アプリのお題を作る係です。お題は、ふだん見過ごしている細部に目を向けさせる「観察」が中心です。",
+      "与えられた場所や季節・天気・テーマにちなんだ、その日だけのお題を4つ作る。2つは観察（look）、2つは写真を撮るお題（photo：「〜を撮ろう」で終わる、撮り方に工夫があるもの）。",
       "書き方：お題は35字以内の短い呼びかけ（〜を探してみよう／〜を見比べよう／〜に耳をすまそう）。35字を超えたら短く書き直す。1つのお題で頼むことは1つだけ。観察のコツは40字以内で、見方のヒントをひとつ。年代・数値・建築様式などの断定は書かない。",
       "手本（今のアプリのお題）：",
       "- 足元のマンホールのふたを見てみよう。どんな絵や模様が描かれている？ ／ コツ：町ごとに絵柄が違うので、集める人もいます",
       "- 建物の2階より上だけを見て歩いてみよう ／ コツ：上を見るだけで、別の町のように感じます",
-      "- 子どものころの通学路で、覚えている景色は？（会話のタネ）",
+      "- しゃがんで、ネコの目の高さで道を撮ろう ／ コツ：目線を低くするだけで、いつもの道が大きく見えます（写真）",
       "守ること：店や私有地に入らないとできないもの、買い物が必要なもの、危ないもの、人をじろじろ見るものは作らない。その場所の歴史・由来・年代など、確かでない事実は書かない。場所の名前は与えられた表記のまま使う。",
-      "形式：JSONだけを返す。[{\"kind\":\"look\"または\"talk\",\"text\":\"お題\",\"tip\":\"観察のコツ（talkは空文字）\"}]",
+      "形式：JSONだけを返す。[{\"kind\":\"look\"または\"photo\",\"text\":\"お題\",\"tip\":\"見方や撮り方のコツ\"}]",
     ].join("\n") }],
     messages: [{ role: "user", content: [{ text: facts.join("\n") }] }],
     inferenceConfig: { maxTokens: 800, temperature: 0.8 },
@@ -577,7 +599,7 @@ async function aiMissions(sub, b) {
   let list;
   try { list = JSON.parse(raw.slice(raw.indexOf("["), raw.lastIndexOf("]") + 1)); } catch { throw fail(502, "AIのお題を作れませんでした"); }
   const missions = (Array.isArray(list) ? list : []).filter((m) => m && m.text).slice(0, 4).map((m) => ({
-    kind: m.kind === "talk" ? "talk" : "look", text: String(m.text).slice(0, 80), tip: m.kind === "talk" ? "" : String(m.tip || "").slice(0, 80),
+    kind: m.kind === "photo" ? "photo" : "look", text: String(m.text).slice(0, 80), tip: String(m.tip || "").slice(0, 80),
   }));
   if (!missions.length) throw fail(502, "AIのお題を作れませんでした");
   try {
