@@ -2172,7 +2172,9 @@ function renderBingoAll() {
   $("#bingoMonth").textContent = `${new Date().getMonth() + 1}月のビンゴ`;
   $$(".bingokind button").forEach((b) => b.classList.toggle("on", b.dataset.v === huntOf(ym)));
 }
-function openBingo() { bingoPick = null; $("#bingoOverlay").hidden = false; renderBingoAll(); }
+// 家で試すときは、ビンゴとことば集めは記録しない（実績に数えないように）
+const simBlocked = () => { if (walk && walk.sim) { toast("家で試すときは使えません。本番の散歩で使えます"); return true; } return false; };
+function openBingo() { if (simBlocked()) return; bingoPick = null; $("#bingoOverlay").hidden = false; renderBingoAll(); }
 
 // ---------- ことば集め ----------
 // 町の看板や張り紙から1文字ずつ写真に撮って、ことばを完成させる。
@@ -2273,7 +2275,7 @@ function renderKotobaAll() {
   if ($("#kotobaAlbum")) renderKotoba($("#kotobaAlbum"));
   if (!$("#kotobaOverlay").hidden) renderKotoba($("#kotobaWalk"));
 }
-function openKotoba() { $("#kotobaOverlay").hidden = false; renderKotobaAll(); }
+function openKotoba() { if (simBlocked()) return; $("#kotobaOverlay").hidden = false; renderKotobaAll(); }
 
 // お店や駅が多い場所か（看板の文字が見つけやすい）。地図データのお店の数で決める
 const SHOP_NEAR = 150, SHOP_MIN = 12;
@@ -2281,7 +2283,7 @@ const nearShops = (route, p) => (route.letterSpots || []).filter((q) => dist(p, 
 // 散歩中：お店の多い場所に来たら、探す文字を知らせる（10分に1回まで）
 function kotobaTick(p) {
   const k = kotobaNow();
-  if (!k || k.target == null || !walk || walk.resting) return;
+  if (!k || k.target == null || !walk || walk.sim || walk.resting) return;
   const now = Date.now(), gap = 10 * 60000 / (walk.sim ? SIM_SPEED : 1);
   if (now - (walk.kotobaAt || 0) < gap || walk.inbox.some((m) => m.kind === "kotoba")) return;
   if (!nearShops(walk.route, p)) return;
