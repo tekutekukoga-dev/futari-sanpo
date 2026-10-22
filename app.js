@@ -1967,25 +1967,45 @@ async function photosOfGroup(group) {
 const BINGO_FREE = 4, BINGO_LINES = [[0, 1, 2], [3, 4, 5], [6, 7, 8], [0, 3, 6], [1, 4, 7], [2, 5, 8], [0, 4, 8], [2, 4, 6]];
 const monthKey = (d = new Date()) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 // テーマに沿って探すハント。色・形・数字など、決まった8つを探す（並びは月ごとに変わる）
+// 色・かたち・数字は、その月は1つにしぼって、ちがうものを9つ集める（そろった写真がきれいに見える）。
+// 昭和と生きものは、いろいろなものを探す
+const HUNT_CATS = ["乗りもの", "花や実", "看板", "食べもの", "ドアや窓", "服やもちもの", "道ばたのもの", "自由な1枚"];
 const HUNTS = {
   normal: { label: "いつものビンゴ" },
-  color: { label: "カラーハント", cells: [["赤いもの", "#d8322b"], ["オレンジのもの", "#ef8a1f"], ["黄色いもの", "#f1c40f"], ["緑のもの", "#3a9d4a"], ["青いもの", "#1f4fd8"], ["紫のもの", "#8a4fbf"], ["ピンクのもの", "#ef8db0"], ["茶色いもの", "#8b5a2b"]] },
-  shape: { label: "かたちハント", cells: ["まる", "三角", "四角", "星", "ハート", "うずまき", "六角形", "矢印"] },
-  number: { label: "数字ハント", cells: ["1", "2", "3", "4", "5", "6", "7", "8"].map((n) => `数字の「${n}」`) },
+  color: { label: "カラーハント", word: "色", values: [
+    { name: "赤", adj: "赤い", hex: "#d8322b" }, { name: "青", adj: "青い", hex: "#1f4fd8" }, { name: "黄色", adj: "黄色い", hex: "#f1c40f" },
+    { name: "緑", adj: "緑の", hex: "#3a9d4a" }, { name: "白", adj: "白い", hex: "#cfcfcf" }, { name: "ピンク", adj: "ピンクの", hex: "#ef8db0" },
+    { name: "オレンジ", adj: "オレンジの", hex: "#ef8a1f" }, { name: "茶色", adj: "茶色い", hex: "#8b5a2b" }, { name: "紫", adj: "紫の", hex: "#8a4fbf" },
+  ], cats: HUNT_CATS },
+  shape: { label: "かたちハント", word: "かたち", values: [
+    { name: "まる", adj: "まるい" }, { name: "三角", adj: "三角の" }, { name: "四角", adj: "四角い" }, { name: "星", adj: "星の形の" }, { name: "ハート", adj: "ハートの形の" }, { name: "うずまき", adj: "うずまきの" },
+  ], cats: ["窓", "看板やマーク", "足もとのもの", "食べもの", "建物の飾り", "植物", "道具やもちもの", "自由な1枚"] },
+  number: { label: "数字ハント", word: "数字", values: [1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => ({ name: String(n), adj: `「${n}」のある` })),
+    cats: ["看板", "車のナンバー", "住所の表示", "値段", "時計や時刻", "電柱やポール", "バス停や駅", "自由な1枚"] },
   retro: { label: "昭和ハント", cells: ["ホーロー看板", "黒電話のマーク", "赤い丸ポスト", "タイル張りの壁", "手書きの値札", "木の電柱", "型板ガラス", "レトロな書体の看板"] },
   life: { label: "生きものハント", cells: ["ねこ", "犬", "スズメ", "ハト", "チョウ", "アリ", "カタツムリかダンゴムシ", "池や川の魚"] },
 };
-// key は「2026-10」（いつものビンゴ）か「2026-10:color」のようにハントの種類つき
+// key は「2026-10」（いつものビンゴ）、「2026-10:retro」、色などは「2026-10:color:0」のように選んだ番号つき
 const huntOf = (key) => key.split(":")[1] || "normal";
 const isColorKey = (key) => huntOf(key) !== "normal";
+const huntValue = (key) => { const h = HUNTS[huntOf(key)]; return h && h.values ? h.values[+(key.split(":")[2] || 0)] : null; };
 function bingoCells(key) {
-  const seed = rng(+key.slice(0, 7).replace("-", "") * 7919), h = HUNTS[huntOf(key)] || HUNTS.normal;
-  const pick = h.cells ? shuffle(h.cells, seed).map((c) => (Array.isArray(c) ? c[0] : c)) : shuffle(BINGO_POOL, seed).slice(0, 8);
+  const seed = rng(+key.slice(0, 7).replace("-", "") * 7919), h = HUNTS[huntOf(key)] || HUNTS.normal, v = huntValue(key);
+  const pick = v ? shuffle(h.cats, seed).map((c) => `${v.adj}${c}`) : h.cells ? shuffle(h.cells, seed) : shuffle(BINGO_POOL, seed).slice(0, 8);
   pick.splice(BINGO_FREE, 0, "ふたりで散歩する");
   return pick;
 }
-const cellColor = (text) => (HUNTS.color.cells.find(([c]) => c === text) || [])[1] || null;
-const bingoKey = (ym = monthKey()) => { const k = store.get("bingoKind:" + ym, "normal"); return HUNTS[k] && k !== "normal" ? `${ym}:${k}` : ym; };
+// カラーハントのマスの色（カードのどのマスも同じ色）
+let bingoHex = null;
+const cellColor = (text) => (bingoHex && text !== "ふたりで散歩する" ? bingoHex : null);
+// その月に選んだ色などの番号。決めていなければ、月ごとに決まった番号（二人で同じになる）
+function bingoKey(ym = monthKey()) {
+  const k = store.get("bingoKind:" + ym, "normal"), h = HUNTS[k];
+  if (!h || k === "normal") return ym;
+  if (!h.values) return `${ym}:${k}`;
+  const def = Math.floor(rng(+ym.replace("-", "") * 131 + k.length)() * h.values.length);
+  return `${ym}:${k}:${store.get(`bingoVal:${ym}:${k}`, def)}`;
+}
 // ごほうびは、カードの種類によらず月に1つ
 const bingoState = (key) => ({ found: {}, ...store.get("bingo:" + key, {}), reward: store.get("bingo:" + key.slice(0, 7), {}).reward || "" });
 const bingoSave = (key, st) => {
@@ -2025,8 +2045,26 @@ function bingoMark(ym, idx, on, photoId) {
 // ビンゴのカードを描く。散歩中は、マスを押すと「見つけた」「撮って埋める」を選べる
 let bingoPick = null, bingoPhotoFor = null;
 async function renderBingo(box, ym) {
-  const cells = bingoCells(ym), st = bingoState(ym), lines = bingoLines(st);
+  const cells = bingoCells(ym), st = bingoState(ym), lines = bingoLines(st), hv = huntValue(ym);
+  bingoHex = hv && hv.hex ? hv.hex : null;
   box.innerHTML = "";
+  box.appendChild(mkEl("small muted bingohow", walk
+    ? "見つけたら、そのマスを押して「撮って埋める」か「見つけた」。マスは自分で埋めます"
+    : "散歩中に見つけたら、そのマスを押して埋めます（写真でも、押すだけでも）。まん中は散歩を終えると自動で埋まります"));
+  // 色・かたち・数字は「今月は○○」と、別のものに変えるボタン
+  if (hv) {
+    const h = HUNTS[huntOf(ym)], head = mkEl("bingovalue");
+    head.appendChild(mkEl("", `今月の${h.word}は「${hv.name}」`));
+    const ch = document.createElement("button"); ch.className = "link"; ch.textContent = `ほかの${h.word}にする`;
+    ch.onclick = () => {
+      if (Object.keys(st.found).some((i) => +i !== BINGO_FREE) && !confirm(`ほかの${h.word}にしますか？（いまのカードは残ります）`)) return;
+      const ymOnly = ym.slice(0, 7), cur = +(ym.split(":")[2] || 0);
+      store.set(`bingoVal:${ymOnly}:${huntOf(ym)}`, (cur + 1) % h.values.length);
+      bingoPick = null; renderBingoAll();
+    };
+    head.appendChild(ch);
+    box.appendChild(head);
+  }
   const grid = mkEl("bingogrid");
   const done = new Set(BINGO_LINES.filter((l) => l.every((i) => st.found[i])).flat());
   for (let i = 0; i < 9; i++) {
@@ -2034,6 +2072,8 @@ async function renderBingo(box, ym) {
     const f = st.found[i];
     b.className = "bingocell" + (f ? " on" : "") + (done.has(i) ? " line" : "") + (bingoPick === i ? " pick" : "");
     b.appendChild(mkEl("bingotext", cells[i]));
+    if (i === BINGO_FREE && !f) b.appendChild(mkEl("bingoauto", "散歩を終えると自動で埋まります"));
+    if (!f && i !== BINGO_FREE) b.classList.add("empty");
     const col = cellColor(cells[i]);
     if (col) b.style.setProperty("--hunt", col), b.classList.add("hunt");
     if (f && f.photoId != null) {
@@ -2083,7 +2123,9 @@ async function saveCollage(key) {
   g.fillStyle = "#f7f7f5"; g.fillRect(0, 0, W, H);
   g.fillStyle = "#111"; g.font = "600 44px 'IBM Plex Sans JP', sans-serif"; g.textBaseline = "middle";
   const [y, m] = key.slice(0, 7).split("-");
-  g.fillText(`${y}年${+m}月の${isColorKey(key) ? HUNTS[huntOf(key)].label : "散歩ビンゴ"}`, 36, 62);
+  const hv = huntValue(key);
+  bingoHex = hv && hv.hex ? hv.hex : null;
+  g.fillText(`${y}年${+m}月の${isColorKey(key) ? HUNTS[huntOf(key)].label : "散歩ビンゴ"}${hv ? `：${hv.name}` : ""}`, 36, 62);
   g.font = "400 22px 'IBM Plex Mono', monospace"; g.fillStyle = "#666";
   g.fillText("ふたり散歩", W - 170, 62);
   for (let i = 0; i < 9; i++) {
@@ -2367,7 +2409,7 @@ async function openReview(year) {
   let bingo = 0;
   for (let m = 1; m <= 12; m++) {
     const ym = `${year}-${String(m).padStart(2, "0")}`;
-    Object.keys(HUNTS).forEach((h) => { const st = store.get("bingo:" + (h === "normal" ? ym : `${ym}:${h}`), null); if (st && st.found) bingo += bingoLines(st); });
+    Object.keys(localStorage).filter((k) => k.startsWith("fs:bingo:" + ym)).forEach((k) => { try { const st = JSON.parse(localStorage.getItem(k)); if (st && st.found) bingo += bingoLines(st); } catch {} });
   }
   const words = store.get("kotobaDone", []).filter((k) => new Date(k.at).getFullYear() === year).map((k) => k.phrase);
   // 写真は、1年を通して偏らないように最大9枚えらぶ（お題の写真を優先）
