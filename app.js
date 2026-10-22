@@ -2109,7 +2109,17 @@ function openBingo() { bingoPick = null; $("#bingoOverlay").hidden = false; rend
 // ---------- ことば集め ----------
 // 町の看板や張り紙から1文字ずつ写真に撮って、ことばを完成させる。
 // できあがったら、切り抜いた文字を並べて1枚の画像（脅迫状ふう）にする
-const KOTOBA_IDEAS = ["またあるこう", "ありがとう", "おつかれさま", "いいてんき", "さんぽびより", "ふたりでいこう", "おなかすいた", "だいすき", "のんびりいこう", "たのしかった", "おいしいね", "いつもありがとう"];
+// ちょっとへんな言葉のほうが、集めていて楽しい。決まった言葉と、「へんな」＋「いぬ」のような組み合わせから選ぶ
+const KOTOBA_IDEAS = ["たこがおこった", "かばのおうさま", "なすにのりたい", "うどんはともだち", "ちくわのあな", "とうふのきもち", "まくらがにげた", "おばけのおやつ", "ねこのかいぎ", "いかのしごと", "だいこんがない", "くつしたのくに", "らくだにきいて", "ひつじがかぞえる"];
+const KOTOBA_ADJ = ["へんな", "ねむい", "まるい", "すっぱい", "さみしい", "えらい", "あやしい", "いそがしい", "はずかしい", "まがった", "ゆるい", "しかくい", "うるさい", "ひまな"];
+const KOTOBA_NOUN = ["いぬ", "ねこ", "たこ", "いか", "かば", "なす", "いす", "かさ", "とうふ", "うどん", "おばけ", "まくら", "ちくわ", "らくだ", "だいこん", "おじさん", "かいだん", "ポスト"];
+let kotobaShuffle = 0;
+function kotobaSuggestions() {
+  const r = rng(Math.floor(Date.now() / 864e5) * 31 + kotobaShuffle);
+  const fixed = shuffle(KOTOBA_IDEAS, r).slice(0, 2);
+  const combos = Array.from({ length: 2 }, () => KOTOBA_ADJ[Math.floor(r() * KOTOBA_ADJ.length)] + KOTOBA_NOUN[Math.floor(r() * KOTOBA_NOUN.length)]);
+  return [...new Set([...combos, ...fixed])];
+}
 const kotobaNow = () => store.get("kotoba", null);
 const kotobaSet = (k) => store.set("kotoba", k);
 const kotobaChars = (phrase) => [...phrase].filter((c) => c.trim());
@@ -2164,7 +2174,7 @@ async function renderKotoba(box) {
   }
   // ことばを選ぶ
   const pick = mkEl("kotobapick");
-  shuffle(KOTOBA_IDEAS, rng(Math.floor(Date.now() / 864e5))).slice(0, 4).forEach((w) => {
+  kotobaSuggestions().forEach((w) => {
     const b = document.createElement("button"); b.className = "chip"; b.textContent = w;
     b.onclick = () => { if (!k || !Object.keys(k.tiles).length || confirm(`「${w}」に変えますか？いま集めている文字は消えます`)) startKotoba(w); };
     pick.appendChild(b);
@@ -2172,6 +2182,9 @@ async function renderKotoba(box) {
   const own = document.createElement("button"); own.className = "chip"; own.textContent = "自分で決める";
   own.onclick = () => { const w = prompt("集めることば（10文字まで）", ""); if (w) startKotoba(w); };
   pick.appendChild(own);
+  const more = document.createElement("button"); more.className = "chip"; more.textContent = "ほかの案";
+  more.onclick = () => { kotobaShuffle++; renderKotobaAll(); };
+  pick.appendChild(more);
   box.appendChild(pick);
   // できあがったことば
   const done = store.get("kotobaDone", []);
