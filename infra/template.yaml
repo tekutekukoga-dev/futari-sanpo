@@ -105,7 +105,7 @@ Resources:
     Type: AWS::Lambda::Function
     Properties:
       FunctionName: futari-sanpo-presignup
-      Runtime: nodejs20.x
+      Runtime: nodejs24.x
       Handler: index.handler
       Role: !GetAtt PreSignUpRole.Arn
       Timeout: 5
@@ -188,7 +188,7 @@ Resources:
     Type: AWS::Lambda::Function
     Properties:
       FunctionName: futari-sanpo-api
-      Runtime: nodejs20.x
+      Runtime: nodejs24.x
       Handler: index.handler
       Role: !GetAtt ApiRole.Arn
       # AI日記は写真を読むので少し時間がかかる（API Gatewayの上限30秒の手前まで）
@@ -212,7 +212,7 @@ Resources:
     Type: AWS::Lambda::Function
     Properties:
       FunctionName: futari-sanpo-weekly
-      Runtime: nodejs20.x
+      Runtime: nodejs24.x
       Handler: index.weekly
       Role: !GetAtt ApiRole.Arn
       Timeout: 120
