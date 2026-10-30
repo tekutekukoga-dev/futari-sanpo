@@ -10,7 +10,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+JP:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
 <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
-<link rel="stylesheet" href="style.css?v=47">
+<link rel="stylesheet" href="style.css?v=48">
 </head>
 <body>
 
@@ -49,9 +49,10 @@
     <div class="item col">
       <span class="itemlabel">ルートの形</span>
       <div class="seg" id="segShape">
-        <button data-v="loop">ぐるっと一周</button><button data-v="dest">目的地へ</button><button data-v="dice">サイコロ</button>
+        <button data-v="loop">ぐるっと一周</button><button data-v="dest">目的地へ</button><button data-v="dice">サイコロ</button><button data-v="free">気まま</button>
       </div>
       <p id="diceNote" class="small muted" hidden>行き先は決めずに出発。角に来るたびに、サイコロが曲がる向きを決めます。地図には次の角までしか出ません。歩く時間がたつころに、ちゃんと家に戻ってきます</p>
+      <p id="freeNote" class="small muted" hidden>ルートは決めずに出発。好きな角で曲がると、近くの見どころをこっそり教えます。帰りたくなったら「帰る」で家までの道を出します</p>
       <div id="destBox" class="meetbox" hidden>
         <span class="itemlabel">目的地</span>
         <form id="destForm" class="destsearch"><input id="destInput" class="field" type="search" enterkeyhint="search" placeholder="駅・お店・公園の名前など"><button class="secondary" type="submit">探す</button></form>
@@ -64,7 +65,7 @@
       </div>
     </div>
     <div class="item col" id="itemTime">
-      <div class="row"><label class="itemlabel" for="rangeTime">歩く時間</label><b id="timeLabel" class="timelabel"></b></div>
+      <div class="row"><label class="itemlabel" for="rangeTime" id="timeLabelText">歩く時間</label><b id="timeLabel" class="timelabel"></b></div>
       <input type="range" id="rangeTime" min="10" max="180" step="5">
       <div class="ticks" aria-hidden="true"><span>10分</span><span>1時間</span><span>2時間</span><span>3時間</span></div>
     </div>
@@ -157,7 +158,7 @@
         <span id="nextSub"></span>
       </div>
     </div>
-    <div class="remain"><span class="muted">残り</span><b id="statRemain">-</b></div>
+    <div class="remain"><span class="muted" id="remainLabel">残り</span><b id="statRemain">-</b></div>
   </div>
   <div id="badgesRow" class="chips">
     <span id="simBadge" class="chip warn" hidden>試しモード（8倍速）</span>
@@ -175,6 +176,7 @@
       <button class="iconbtn" id="btnHelp2" aria-label="使い方">？</button>
     </div>
     <label class="fab mini crime" for="photoInput" id="btnCrime" aria-label="犯罪あつめの写真を撮る">犯罪</label>
+    <label class="fab mini gift" for="photoInput" id="btnGift" aria-label="パートナーへのおみやげの写真を撮る" hidden>土産</label>
     <label class="fab mini ooc" for="photoInput" id="btnOoc" aria-label="落とし物あつめの写真を撮る">落</label>
     <label class="fab" for="photoInput" id="btnFree" aria-label="写真を撮る">
       <svg viewBox="0 0 24 24" width="26" height="26" aria-hidden="true"><path fill="currentColor" d="M9 4l-1.5 2H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-3.5L15 4H9zm3 4.5a4.5 4.5 0 1 1 0 9 4.5 4.5 0 0 1 0-9zm0 2a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5z"/></svg><span>撮る</span>
@@ -224,6 +226,7 @@
       <button id="btnWalkAlbum" class="link">アルバム</button>
       <button id="btnKotoba" class="link">ことば</button>
       <button id="btnBingo" class="link">ビンゴ</button>
+      <button id="btnGoHome" class="link" hidden>帰る</button>
       <button id="btnEnd" class="link danger">終える</button>
     </div>
   </div>
@@ -238,6 +241,10 @@
     <ul id="totalFacts" class="facts"></ul>
     <span class="muted small">たとえは押すたびに変わります。動物の距離やカロリーは、よく言われる目安です</span>
     <div id="reviewBtns" class="actions"></div>
+  </div>
+  <div class="group bingocard">
+    <span class="itemlabel">おみやげ</span>
+    <div id="giftBox"></div>
   </div>
   <div class="group bingocard">
     <span class="itemlabel">犯罪あつめ</span>
@@ -277,6 +284,7 @@
     <span class="itemlabel">ふたりの散歩地図</span>
     <div id="walkedMap" class="map walkedmap"></div>
     <span id="walkedText" class="muted small"></span>
+    <b id="nuriText" class="nuritext"></b>
   </div>
   <div class="group titlecard">
     <span class="itemlabel">いまの称号</span>
@@ -415,8 +423,8 @@
 <div id="updateBar" class="updatebar" hidden><span>新しい版があります</span><button id="btnUpdate" class="primary">更新する</button></div>
 
 <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
-<script src="missions.js?v=47"></script>
-<script src="badges.js?v=47"></script>
-<script src="app.js?v=47"></script>
+<script src="missions.js?v=48"></script>
+<script src="badges.js?v=48"></script>
+<script src="app.js?v=48"></script>
 </body>
 </html>

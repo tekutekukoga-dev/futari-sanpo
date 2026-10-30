@@ -82,7 +82,7 @@ window.Cloud = (() => {
     if (syncing) return syncing;
     if (!force && Date.now() - lastSync < 30000) return false;
     syncing = (async () => {
-      let changed = false;
+      let changed = false, gifts = 0;
       try {
         const walks = await allWalks();
         for (const w of walks) {
@@ -116,8 +116,11 @@ window.Cloud = (() => {
           const res = await fetch(p.url);
           if (!res.ok) continue;
           await addPhoto({ walkId: p.walkId, data: await res.arrayBuffer(), type: "image/jpeg", mission: p.mission, pos: p.pos, at: p.at, remoteId: p.id, owner: p.owner });
+          if (p.mission === "おみやげ" && p.owner !== myId()) gifts++;
           changed = true;
         }
+        // 相手がひとり散歩で撮ってきたおみやげが届いたら知らせる
+        if (gifts) toast(`${partnerName() || "パートナー"}から、おみやげの写真が${gifts}枚届きました。アルバムの「おみやげ」で見られます`);
         lastSync = Date.now(); ls.set("lastSync", lastSync); syncError = "";
       } catch (e) {
         syncError = e.message;

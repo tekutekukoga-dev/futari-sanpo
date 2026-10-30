@@ -616,3 +616,6 @@ details.more[open] > summary::before { content: "－ "; }
 .candcard.on .ckind { color: var(--accent); font-weight: 700; }
 .candidates.cards .candcard .d { font-size: 13px; color: var(--muted); white-space: nowrap; }
 .candidates.cards .candcard .gmap { margin-top: auto; padding: 8px 12px; border-left: none; border-top: 1px solid var(--line); font-size: 12px; }
+/* おみやげボタン・ぬりつぶし */
+.fab.mini.gift { bottom: 210px; background: #d9822b; }
+.nuritext { display: block; margin-top: 6px; font-size: 14px; color: var(--accent); }

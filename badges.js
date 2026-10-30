@@ -16,7 +16,7 @@ const TITLES = [
 // バッジの分類（アルバムでは分類ごとに並べる）
 const BADGE_CATS = {
   dist: "歩いた距離", count: "散歩の回数", look: "観察", photo: "写真とメモ",
-  stop: "寄り道と目的地", time: "時間と季節", weather: "天気とテーマ", streak: "続ける", special: "特別な日", secret: "ひみつ",
+  stop: "寄り道と目的地", solo: "ひとり散歩", time: "時間と季節", weather: "天気とテーマ", streak: "続ける", special: "特別な日", secret: "ひみつ",
 };
 
 // mark はハンコ風に丸で囲んで表示する1文字。secret は取るまで名前も条件も隠す
@@ -159,6 +159,21 @@ const BADGES = [
   b("secret", "fri13", "凶", "13日の金曜日", "13日の金曜日に散歩する", 1, (s) => s.fri13, true),
   b("secret", "short", "近", "ちょっとそこまで", "1km未満の散歩を終える", 1, (s) => s.shorts, true),
   b("secret", "noskip", "黙", "もくもく散歩", "お題を1つも開かずに散歩を終える", 1, (s) => s.silents, true),
+  // ひとり散歩
+  b("solo", "solo1", "独", "ひとりの時間", "ひとりで散歩する", 1, (s) => s.solos),
+  b("solo", "solo10", "孤", "ひとり散歩の達人", "ひとりで10回散歩する", 10, (s) => s.solos),
+  b("solo", "solo30", "仙", "孤高の散歩人", "ひとりで30回散歩する", 30, (s) => s.solos),
+  b("solo", "soloMorning", "朝", "朝のひとり占め", "朝7時前に、ひとりで散歩する", 1, (s) => s.soloMornings),
+  b("solo", "soloRain", "傘", "雨の日のひとり言", "雨か雪の日に、ひとりで散歩する", 1, (s) => s.soloRains),
+  b("solo", "soloNight", "月", "夜のひとり歩き", "日が暮れてから、ひとりで散歩する", 1, (s) => s.soloNights),
+  b("solo", "soloLong", "旅", "ひとり旅", "ひとりで8km以上歩く", 1, (s) => s.soloLong),
+  b("solo", "free1", "気", "気の向くまま", "気まま散歩をする", 1, (s) => s.frees),
+  b("solo", "free10", "風", "風まかせ", "気まま散歩を10回する", 10, (s) => s.frees),
+  b("solo", "gift1", "土", "おみやげ係", "おみやげの写真を1枚撮る", 1, (s) => s.gifts),
+  b("solo", "gift10", "贈", "おみやげ名人", "おみやげの写真を10枚撮る", 10, (s) => s.gifts),
+  b("solo", "nuri5", "塗", "ぬりはじめ", "マイ地図ぬりつぶしで5%", 5, (s) => s.nuri),
+  b("solo", "nuri20", "図", "町の地図職人", "マイ地図ぬりつぶしで20%", 20, (s) => s.nuri),
+  b("solo", "nuri50", "主", "この町のぬし", "マイ地図ぬりつぶしで50%", 50, (s) => s.nuri),
 ];
 
 const pad = (n) => String(n).padStart(2, "0");
@@ -177,6 +192,7 @@ function badgeStats(walks) {
     walks: list.length, km: 0, maxKm: 0, totalMin: 0, maxMin: 0, pts: 0, maxDone: 0, looks: 0, talks: 0, photoMissions: 0, cats: {}, fulls: 0, photos: 0, memos: 0,
     stopType: {}, detours: 0, dests: 0, oneways: 0, splits: 0, mornings: 0, dawns: 0, nights: 0, lates: 0, weekends: 0,
     weather: {}, days: new Set(), zorome: 0, clockZorome: 0, fri13: 0, shorts: 0, silents: 0,
+    solos: 0, soloMornings: 0, soloRains: 0, soloNights: 0, soloLong: 0, frees: 0, gifts: 0,
   };
   const stops = new Set(), seasons = new Set(), months = new Set(), themes = new Set(), perMonth = {}, perDay = {};
   for (const w of list) {
@@ -189,6 +205,16 @@ function badgeStats(walks) {
     s.detours += w.detours || 0;
     if (w.dest) { s.dests++; if (w.dest.back === "oneway") s.oneways++; }
     if (w.split) s.splits++;
+    if (w.free) s.frees++;
+    s.gifts += w.gifts || 0;
+    if (w.solo) {
+      const hh = new Date(w.startedAt).getHours();
+      s.solos++;
+      if (hh >= 4 && hh < 7) s.soloMornings++;
+      if (w.weather && ["rain", "snow"].includes(w.weather.kind)) s.soloRains++;
+      if (w.night) s.soloNights++;
+      if (w.distance >= 8000) s.soloLong++;
+    }
     if (w.theme) themes.add(w.theme);
     if (w.weather) {
       if (w.weather.kind) s.weather[w.weather.kind] = (s.weather[w.weather.kind] || 0) + 1;
@@ -248,6 +274,7 @@ function badgeStats(walks) {
     s.stillMax = Math.max(0, ...both.map((x) => (x.sightings || []).filter((y) => y.still).length));
   } catch { s.crime = 0; s.crimeKinds = 0; s.ooc = 0; s.oocGlove = 0; s.collSR = 0; s.kira = 0; s.stillMax = 0; }
   try { s.kotoba = (JSON.parse(localStorage.getItem("fs:kotobaDone")) || []).length; } catch { s.kotoba = 0; }
+  try { s.nuri = (JSON.parse(localStorage.getItem("fs:nuri")) || {}).best || 0; } catch { s.nuri = 0; }
   s.streakWeeks = longestRun(dayNums.map((n) => Math.floor((n + 3) / 7)));
   return s;
 }

@@ -169,6 +169,8 @@ let walk = null;
 const isDest = () => plan.shape === "dest";
 const isDice = () => plan.shape === "dice";
 const isSolo = () => plan.party === "solo";
+// 気まま散歩：ルートを決めずに歩き、近くの見どころをささやく。帰りたくなったら家までの道を出す
+const isFree = () => plan.shape === "free";
 
 // ---------- 地図 ----------
 // ベクター地図（OpenFreeMap）。文字がくっきりして、回転しても地名がまっすぐ読める
@@ -607,7 +609,7 @@ async function drawPlan(fit = true) {
     planMarkers.push(htmlMarker(planMap, pointAt(plan.route, sp.startAlong), mkEl("pin fork", "分かれ道"), { anchor: "bottom", offset: [0, -6] }));
     planMarkers.push(htmlMarker(planMap, sp.meetPos, mkEl("pin meet", `合流：${sp.meetName}`), { anchor: "bottom", offset: [0, -6] }));
   } else clearRoute(planMap, "routeB");
-  if (plan.route && plan.route.dice) {
+  if (plan.route && (plan.route.dice || plan.route.free)) {
     clearRoute(planMap);
     if (fit) planMap.jumpTo({ center: ll(plan.home), zoom: 15 });
   } else if (plan.route) {
@@ -934,11 +936,13 @@ async function pickDestOnMap(p) {
 function applyShapeUI() {
   $("#destBox").hidden = !isDest();
   $("#itemTime").hidden = isDest();
-  $("#itemSplit").hidden = isSolo() || !!MEGURI[plan.meguri] || isDice();
+  $("#itemSplit").hidden = isSolo() || !!MEGURI[plan.meguri] || isDice() || isFree();
   // サイコロ散歩では、めぐり・寄り道は使わない（行き先はサイコロまかせ）
-  $("#itemMeguri").hidden = isDice();
-  $("#itemStop").hidden = isDice();
+  $("#itemMeguri").hidden = isDice() || isFree();
+  $("#itemStop").hidden = isDice() || isFree();
   $("#diceNote").hidden = !isDice();
+  $("#freeNote").hidden = !isFree();
+  $("#timeLabelText").textContent = isFree() ? "歩く時間（目安）" : "歩く時間";
   // 目的地モードでは、合流場所は目的地
   $("#meetBox").hidden = !plan.split || isDest();
   $("#splitDestNote").hidden = !(plan.split && isDest());
@@ -1881,7 +1885,9 @@ async function buildRoute() {
   planTries = 0;
   planBusy(isDice() ? "サイコロ散歩の道を作っています" : MEGURI[plan.meguri] ? `${MEGURI[plan.meguri].label}をめぐる道を作っています` : isDest() ? `「${plan.dest ? plan.dest.name : "目的地"}」への道を作っています` : "ルートを作っています", "道をつないでいます");
   try {
-    if (isDice()) {
+    if (isFree()) {
+      plan.route = freeRoute(plan.home, loopMeters());
+    } else if (isDice()) {
       plan.route = await makeDiceRoute();
     } else if (!isDest() && MEGURI[plan.meguri]) {
       plan.route = await makeMeguriRoute();
@@ -1930,7 +1936,7 @@ async function buildRoute() {
     }
     showSummary();
     await drawPlan();
-    loadPois(plan.route);
+    if (!plan.route.free) loadPois(plan.route);
     planBusyOff();
     toast(`ルートができました（${fmtKm(plan.route.total)}km・約${Math.round(plan.route.total / WALK_SPEED / 60)}分）`);
   } catch (e) {
@@ -1943,7 +1949,7 @@ async function buildRoute() {
 }
 
 function showSummary() {
-  const r = plan.route, info = loopInfo(r);
+  const r = plan.route, info = r.free ? { clockwise: true, first: "" } : loopInfo(r);
   $("#sumDist").textContent = fmtKm(r.total);
   $("#sumTime").textContent = Math.round(r.total / WALK_SPEED / 60);
   $("#sumLoop").textContent = `${info.clockwise ? "時計回り" : "反時計回り"}のルート。歩きはじめたら、まず${info.first}へ向かいます（地図の矢印の向き）`;
@@ -1953,12 +1959,13 @@ function showSummary() {
       ? `「${r.dest.name}」までの片道です。歩きはじめたら、まず${info.first}へ向かいます。帰りは電車やバスで（着いたら乗りかえを調べるボタンが出ます）`
       : `「${r.dest.name}」まで約${toMin}分。帰りは別の道でスタート地点へ戻ります。歩きはじめたら、まず${info.first}へ向かいます（地図の矢印の向き）`;
   }
+  if (r.free) $("#sumLoop").textContent = `気まま散歩：ルートは決めずに出発。気になる角で、好きに曲がってください。近くに見どころがあると、こっそり教えます。約${Math.round(r.total / WALK_SPEED / 60)}分が目安。帰りたくなったら「帰る」で家までの道を出します`;
   if (r.dice) $("#sumLoop").textContent = `サイコロ散歩：どこへ行くかは、歩きながらのお楽しみ。角に来るたびにサイコロが曲がる向きを決めて、約${Math.round(r.total / WALK_SPEED / 60)}分で家に戻ってきます`;
   const mg = r.meguri;
   if (mg) $("#sumLoop").textContent += mg.lines.length
     ? `。${MEGURI[mg.kind].label}${mg.name ? `「${mg.name}」` : ""}に沿って、約${fmtKm(mg.meters)}km歩きます（地図の太い${mg.kind === "ankyo" ? "水色" : "オレンジ"}の線）${mg.spots.length ? `。ほかに、お店の多い通りを${mg.spots.length}か所通ります` : ""}`
     : `。${MEGURI[mg.kind].label}${/はしご$/.test(MEGURI[mg.kind].label) ? "" : "めぐり"}：${mg.spots.map((x) => `「${x.name}」`).join("")}を通ります${mg.spots.some((x) => x.label === "御神木のありそうな神社") ? "（近くの地図に名木が少なかったので、御神木がありそうな神社を選びました）" : ""}`;
-  $("#sumStop").textContent = plan.chosen && plan.stop !== "none" ? `途中で「${plan.chosen.name}」に寄ります` : r.dest ? "寄り道なしで、目的地へ向かいます" : "寄り道なしで、ぐるっと一周します";
+  $("#sumStop").textContent = r.free ? "寄り道は、気の向くままに" : plan.chosen && plan.stop !== "none" ? `途中で「${plan.chosen.name}」に寄ります` : r.dest ? "寄り道なしで、目的地へ向かいます" : "寄り道なしで、ぐるっと一周します";
   const { sunset } = sunTimes(new Date(), plan.home[0], plan.home[1]);
   const night = isNightWalk(Date.now(), r.total / WALK_SPEED / 60, plan.home);
   $("#sumPois").textContent = r.pois ? (r.pois.length ? `ルート沿いに、ちょっと見たい場所が${r.pois.length}か所あります（地図の丸いマーク）` : "") : "ルート沿いの見どころを探しています…";
@@ -1988,6 +1995,7 @@ function showSummary() {
 }
 // このルートのうち、はじめて歩く道がどれくらいあるか
 async function freshHint(r) {
+  if (r.free) { $("#sumFresh").hidden = true; return; }
   const cells = await myWalkedCells();
   if (plan.route !== r) return;
   $("#sumFresh").hidden = !cells.size;
@@ -2058,7 +2066,7 @@ async function onMake() {
   if (isDest() && !plan.dest) return showPlanError("目的地を選んでください（名前で探すか、地図をタップ）");
   showPlanError("");
   plan.route = null; $("#routeSummary").hidden = true;
-  if (plan.stop === "none" || isDice()) { plan.chosen = null; if (await prepareMeet()) await buildRoute(); else drawPlan(); return; }
+  if (plan.stop === "none" || isDice() || isFree()) { plan.chosen = null; if (await prepareMeet()) await buildRoute(); else drawPlan(); return; }
   $("#btnMake").disabled = true; $("#btnMake").textContent = plan.stop === "any" ? "寄り道先を探しています…" : `${STOP_TYPES[plan.stop].label}を探しています…`;
   planBusy("ルートを作っています", plan.stop === "any" ? "まず、寄り道先を探しています" : `まず、${STOP_TYPES[plan.stop].label}を探しています`);
   try {
@@ -2089,9 +2097,9 @@ async function onMake() {
 function sharePayload() {
   const payload = {
     h: plan.home.map((v) => +v.toFixed(5)), m: plan.minutes, i: plan.interval, s: plan.seed, st: plan.stop, th: plan.theme,
-    dc: plan.route && plan.route.dice ? 1 : undefined,
+    dc: plan.route && plan.route.dice ? 1 : undefined, fr: plan.route && plan.route.free ? 1 : undefined,
     // 経由地はいつも入れる。作り直すと、はじめての道の記録などで相手と違う道になることがあるため
-    w: plan.route && !plan.route.split ? plan.route.waypoints.map((q) => q.map((v) => +v.toFixed(5))) : undefined,
+    w: plan.route && !plan.route.split && !plan.route.free ? plan.route.waypoints.map((q) => q.map((v) => +v.toFixed(5))) : undefined,
     si: plan.route && !plan.route.split ? plan.route.stopIndex : undefined, dt: plan.route && plan.route.detours,
     // めぐり：暗渠の線（間引いたもの）と、めぐる場所。受け取った人にも同じ案内が届くように
     mg: plan.route && plan.route.meguri ? (({ kind, name, lines, spots, meters }) => ({ k: kind, n: name, m: meters,
@@ -2168,7 +2176,10 @@ async function loadShared() {
     $("#sharedBanner").hidden = false;
     $("#planForm").hidden = true; $("#btnMake").hidden = true; $("#btnPaste").hidden = true; $("#planInbox").hidden = true;
     planMap.jumpTo({ center: ll(plan.home), zoom: 15 });
-    if (p.sp) {
+    if (p.fr) {
+      plan.shape = "free"; plan.route = freeRoute(p.h, p.m * 60 * WALK_SPEED);
+      showSummary(); await drawPlan();
+    } else if (p.sp) {
       // 別行動のルートは、2本の経由地をそのまま使って同じ道にする。リンクを開いた人には黒の道をすすめる
       const A = shapeRoute(await osrm(p.sp.wA, true), p.sp.wA, p.sp.si ?? null), B = shapeRoute(await osrm(p.sp.wB, true), p.sp.wB, p.sp.si ?? null);
       plan.route = composeSplit(A, B, { meetName: p.sp.n, meetPos: p.sp.p, minutes: p.sp.min, wA: p.sp.wA, wB: p.sp.wB, stopIndex: p.sp.si ?? null });
@@ -2343,7 +2354,7 @@ function startWalk(sim) {
     theme: themeKey(plan.seed), weather: plan.weather,
     split: route.split || null, branch: null, askedBranch: false, met: false, role: plan.role,
     turnAlert: plan.turnAlert, alerted: [], noticed: [],
-    inbox: [], results: [], photos: 0,
+    inbox: [], results: [], photos: 0, gifts: 0, walked: 0, free: !!route.free, wasFree: !!route.free,
     stopArrived: false, destArrived: false, resting: false, restMs: 0, restStart: 0, off: 0, simAlong: 0, done: false,
   };
   // 夫婦用ページ：AIのお題が届いたら、まだ届いていないお題と入れ替える
@@ -2354,6 +2365,8 @@ function startWalk(sim) {
     letters.forEach((l, i) => walk.inbox.unshift({ kind: "letter", id: "letter" + i, label: `${l.from}からの手紙`, text: l.text, arrivedAt: Date.now() }));
     buzz([100, 80, 100]); renderCard(); saveActive();
   });
+  if (walk.free) walk.inbox.push({ kind: "whisper", id: "free0", text: "気まま散歩のはじまり。気になる角で、好きに曲がってください。近くに見どころがあると、こっそり教えます", arrivedAt: Date.now() });
+  if (walk.solo) walk.inbox.push({ kind: "gift", id: "gift0", text: `ひとり散歩の日は、おみやげ探し。パートナーが好きそうなものを見つけたら、右の「土産」ボタンで撮ろう（目標3つ）${window.Cloud ? "。撮った写真は、相手のアルバムの「おみやげ」に届きます" : "。帰ったらアルバムの「おみやげ」で見せてあげよう"}`, arrivedAt: Date.now() });
   if (walk.theme) walk.inbox.push({ kind: "theme", id: "theme", text: `今日のテーマは「${THEMES[walk.theme].label}」。${THEMES[walk.theme].desc}`, arrivedAt: Date.now() });
   buzz(100);
   resumeWalkSession();
@@ -2365,6 +2378,8 @@ function resumeWalkSession() {
   $("#simBadge").hidden = !walk.sim;
   $("#nightBadge").hidden = !walk.night;
   $("#themeBadge").hidden = !walk.theme;
+  $("#btnGift").hidden = !walk.solo;
+  $("#btnGoHome").hidden = !walk.free;
   $("#destCard").hidden = true; showDestCard();
   if (walk.theme) $("#themeBadge").textContent = THEMES[walk.theme].label;
   $("#btnHeading").textContent = heading.mode === "north" ? "N" : "↑";
@@ -2467,6 +2482,11 @@ function saveActive() {
 }
 
 function simStep() {
+  // 気まま散歩の試しは、向きを少しずつ変えながら、ふらふら歩く
+  if (walk.free) {
+    walk.simHeading = (walk.simHeading ?? Math.random() * 360) + (Math.random() - 0.5) * 50;
+    return onPosition(dest(walk.pos, walk.simHeading, WALK_SPEED * SIM_SPEED * 0.5));
+  }
   if (!walk.resting) walk.simAlong = Math.min(walk.route.total, walk.simAlong + WALK_SPEED * SIM_SPEED * 0.5);
   onPosition(pointAt(walk.route, walk.simAlong));
 }
@@ -2494,7 +2514,7 @@ function onPosition(p) {
   walk.lastFixAt = Date.now();
   walk.pos = p;
   const last = walk.track[walk.track.length - 1];
-  if (dist(last, p) > 5) { walk.track.push(p); setTrack(walkMap, walk.track); }
+  if (dist(last, p) > 5) { walk.walked = (walk.walked || 0) + dist(last, p); walk.track.push(p); setTrack(walkMap, walk.track); }
   walkMe.setLngLat(ll(p));
   walkMap.jumpTo({ center: ll(p) });
 
@@ -2515,12 +2535,16 @@ function onPosition(p) {
     return;
   }
 
-  const best = locate(p, gap);
-  if (best.d < 45) {
-    walk.off = 0; $("#offRoute").hidden = true;
-    if (best.along > walk.progress) walk.progress = best.along;
-  } else if (++walk.off >= 3) {
-    $("#offRoute").hidden = false;
+  // 気まま散歩：ルートがないので、歩いた道のりで進み具合を数える
+  if (walk.free) { walk.progress = walk.walked; whisperTick(p); }
+  else {
+    const best = locate(p, gap);
+    if (best.d < 45) {
+      walk.off = 0; $("#offRoute").hidden = true;
+      if (best.along > walk.progress) walk.progress = best.along;
+    } else if (++walk.off >= 3) {
+      $("#offRoute").hidden = false;
+    }
   }
 
   const r = walk.route, prog = walk.progress;
@@ -2543,7 +2567,7 @@ function onPosition(p) {
     if (walk.branch && !walk.met && prog >= meetAlong - 25) arriveMeet();
   }
 
-  kotobaTick(p);
+  if (!walk.free) kotobaTick(p);
   diceTick(walk.progress);
   lastingTick(p);
   // 寄り道先に到着
@@ -2655,8 +2679,9 @@ function whereIs(pos) {
 let spotPing = null;
 function showSpotPing(m) {
   if (spotPing) { spotPing.remove(); spotPing = null; }
-  if (!m || m.kind !== "spot" || !walkMap) return;
-  spotPing = htmlMarker(walkMap, m.spot.pos, mkEl("ping"));
+  const pos = m && (m.kind === "spot" ? m.spot.pos : m.kind === "whisper" ? m.pos : null);
+  if (!pos || !walkMap) return;
+  spotPing = htmlMarker(walkMap, pos, mkEl("ping"));
 }
 function renderCard() {
   const m = walk.inbox[0];
@@ -2713,7 +2738,11 @@ function updateWalkUI() {
   if (top && top.kind === "spot") { $("#missionTip").textContent = `場所：${whereIs(top.spot.pos)}（地図の点滅しているところ）`; $("#missionTip").hidden = false; }
   const r = walk.route, prog = walk.progress;
   const next = r.turns.find((t) => t.along > prog + 3);
-  if (walk.resting) {
+  $("#remainLabel").textContent = walk.free ? "歩いた" : "残り";
+  if (walk.free) {
+    $("#nextArrow").textContent = "✦"; $("#nextText").textContent = "気の向くままに";
+    $("#nextSub").textContent = "帰りたくなったら、下の「帰る」";
+  } else if (walk.resting) {
     $("#nextArrow").textContent = "…"; $("#nextText").textContent = "休憩中"; $("#nextSub").textContent = walk.stopName || "";
   } else if (next && r.dice && next.along - prog > 45) {
     $("#nextArrow").textContent = "?";
@@ -2730,7 +2759,7 @@ function updateWalkUI() {
   } else {
     $("#nextArrow").textContent = "⌂"; $("#nextText").textContent = "このままゴールへ"; $("#nextSub").textContent = "";
   }
-  $("#statRemain").textContent = `${fmtKm(Math.max(0, r.total - prog))}km`;
+  $("#statRemain").textContent = `${fmtKm(walk.free ? walk.walked : Math.max(0, r.total - prog))}km`;
   const showMeet = walk.split && walk.branch && !walk.met;
   // 夫婦用ページ：別行動のあいだは、お互いの現在地をやりとりする
   if (window.Cloud && showMeet && !walk.sim) Cloud.shareWhileApart(walk);
@@ -2790,8 +2819,9 @@ async function finishWalk(early) {
   w.inbox.filter((m) => !INFO_KINDS.includes(m.kind)).forEach((m) => w.results.push({ id: m.id, kind: m.kind, cat: m.cat || null, text: m.text, outcome: "skip" }));
   const record = {
     id: w.id, startedAt: w.startedAt, endedAt: Date.now(), minutes: Math.round(elapsed / 60000),
-    distance: Math.round(early ? w.progress : w.route.total), stopName: w.stopName,
-    route: w.route.coords.filter((_, i) => i % 3 === 0), track: w.track, photos: w.photos,
+    distance: Math.round(w.wasFree ? w.walked : early ? w.progress : w.route.total), stopName: w.stopName,
+    route: (w.wasFree ? w.track : w.route.coords).filter((_, i) => i % 3 === 0), track: w.track, photos: w.photos,
+    free: !!w.wasFree, gifts: w.gifts || 0,
     results: w.results, sim: w.sim, night: !!w.night, theme: w.theme || null, weather: w.weather || null, seed: w.seed,
     split: w.split ? { meetName: w.split.meetName, branch: w.branch } : null,
     dest: w.route.dest ? { name: w.route.dest.name, back: w.route.dest.back } : null,
@@ -2873,7 +2903,8 @@ async function onPhoto(e) {
     }
     walk.photos++;
     saveActive();
-    toast("写真を保存しました");
+    if (mission === "おみやげ") { walk.gifts = (walk.gifts || 0) + 1; saveActive(); toast(`おみやげにしました（${walk.gifts}個め${walk.gifts < 3 ? `・あと${3 - walk.gifts}つ` : ""}）`); }
+    else toast("写真を保存しました");
     renderThumbs();
   } catch (err) {
     toast("写真を保存できませんでした：" + (err && (err.message || err.name)), true);
@@ -3628,6 +3659,7 @@ async function renderWalkedMap(walks) {
   $("#walkedCard").hidden = !lines.length;
   if (!lines.length) return;
   $("#walkedText").textContent = `${lines.length}回分の道。歩いた道は約${fmtKm(uniqueKm(lines) * 1000)}km（同じ道は1回に数えます）。何度も通った道ほど濃く見えます`;
+  renderNuri(walkedCells(lines));
   if (!walkedMap) walkedMap = makeMap($("#walkedMap"));
   await walkedMap.ready;
   const data = { type: "FeatureCollection", features: lines.map((c) => lineData(c)) };
@@ -3651,6 +3683,7 @@ async function renderAlbum() {
   renderKotobaAll();
   renderZukan();
   renderColl("crime"); renderColl("ooc");
+  renderGifts();
   if (window.Cloud) {
     Cloud.renderBox();
     if (!renderAlbum.syncing) {
@@ -3887,6 +3920,150 @@ async function checkUpdate() {
   } catch {}
 }
 
+// ---------- 気まま散歩 ----------
+// ルートを持たない散歩。地図の線は引かず、歩いた道のりでお題を届ける。total は目安の距離
+function freeRoute(home, meters) {
+  return { coords: [home, home], cum: [0, 0], total: meters, turns: [], waypoints: [home, home], legEnds: [0], stopIndex: null, stopAlong: null, pois: [], free: true };
+}
+// 近くの見どころを、歩いている向きから見て「右のほう」「この先」などでささやく
+const WHISPER_KINDS = [
+  [(pr) => pr.class === "place_of_worship" && /神社|寺|院|宮|稲荷|八幡|天神|観音|不動|地蔵/.test(pr.name || ""), "神社・お寺"],
+  [(pr) => pr.class === "park" && !/児童|遊園/.test(pr.name || ""), "公園"],
+  [(pr) => pr.subclass === "viewpoint", "景色のいい所"],
+  [(pr) => pr.class === "monument" || pr.subclass === "attraction", "ちょっと気になる場所"],
+  [(pr) => pr.class === "cafe" && KISSA_WORD.test(pr.name || ""), "喫茶店"],
+  [(pr) => pr.subclass === "bakery", "パン屋"],
+  [(pr) => pr.subclass === "confectionery", "お菓子屋"],
+  [(pr) => pr.subclass === "books", "本屋"],
+  [(pr) => pr.class === "ice_cream", "アイス屋"],
+];
+let whisperPts = { key: null, list: [] };
+async function whisperSpots(p) {
+  const key = `${p[0].toFixed(3)},${p[1].toFixed(3)}`;
+  if (whisperPts.key === key) return whisperPts.list;
+  const pts = await tilesAround(p, 300, (bytes, z, x, y) => decodeTilePoints(bytes, "poi", z, x, y)).catch(() => []);
+  const list = [];
+  pts.forEach(({ props: pr, lat, lon }) => {
+    const name = pr["name:ja"] || pr.name;
+    if (!name) return;
+    const k = WHISPER_KINDS.find(([test]) => test({ ...pr, name }));
+    if (k) list.push({ id: "wh" + lat.toFixed(5) + lon.toFixed(5), name, label: k[1], pos: [lat, lon] });
+  });
+  whisperPts = { key, list };
+  return list;
+}
+function relDir(heading, b) {
+  const d = ((b - heading + 540) % 360) - 180;
+  return Math.abs(d) < 30 ? "この先" : Math.abs(d) > 140 ? "うしろのほう" : d > 0 ? (d < 80 ? "右ななめ前" : "右のほう") : d > -80 ? "左ななめ前" : "左のほう";
+}
+async function whisperTick(p) {
+  if (!walk || !walk.free || walk.whispering) return;
+  // 150m歩くごとに1回まで
+  if (walk.walked - (walk.whisperAt ?? -100) < 150) return;
+  const t = walk.track, back = t[Math.max(0, t.length - 6)];
+  if (dist(back, p) < 15) return;
+  walk.whispering = true;
+  try {
+    const heard = walk.whispered || (walk.whispered = []);
+    const heading = bearing(back, p);
+    const cands = (await whisperSpots(p)).map((s) => ({ ...s, d: dist(p, s.pos) }))
+      .filter((s) => s.d > 40 && s.d < 260 && !heard.includes(s.id) && relDir(heading, bearing(p, s.pos)) !== "うしろのほう")
+      .sort((a, b) => a.d - b.d);
+    const s = cands[0];
+    if (!s || !walk) return;
+    walk.whisperAt = walk.walked; heard.push(s.id);
+    const where = relDir(heading, bearing(p, s.pos));
+    walk.inbox = walk.inbox.filter((m) => m.kind !== "whisper");
+    walk.inbox.unshift({ kind: "whisper", id: s.id, pos: s.pos, text: `${where}、${fmtDist(Math.round(s.d / 10) * 10)}くらいのところに「${s.name}」（${s.label}）があるよ。行ってみる？`, arrivedAt: Date.now() });
+    buzz([40, 60, 40]); renderCard(); saveActive();
+  } finally { if (walk) walk.whispering = false; }
+}
+// 「帰る」：いまいる場所から家までの道を出して、ふつうの道案内に切りかえる
+async function goHome() {
+  if (!walk || !walk.free) return;
+  const home = walk.route.waypoints[0];
+  if (dist(walk.pos, home) < 80) return toast("もう家のすぐ近くです。おつかれさま！");
+  $("#btnGoHome").disabled = true;
+  try {
+    const pts = [walk.pos, home], nr = shapeRoute(await osrm(pts), pts, null);
+    nr.pois = [];
+    // まだ届いていないお題は、帰り道の上に並べ直す
+    const remaining = walk.events.slice(walk.eventIdx).slice(0, Math.max(1, Math.floor(nr.total / 400)));
+    remaining.forEach((e, i) => (e.at = Math.min(nr.total * 0.85, 150 + ((nr.total * 0.7) / Math.max(1, remaining.length)) * i)));
+    walk.events = remaining; walk.eventIdx = 0;
+    walk.route = nr; walk.free = false; walk.progress = 0; walk.simAlong = 0; walk.off = 0; walk.alerted = [];
+    walk.inbox = walk.inbox.filter((m) => m.kind !== "whisper");
+    $("#btnGoHome").hidden = true;
+    drawWalkRoute(); renderCard(); saveActive(); updateWalkUI();
+    toast(`家までの道を出しました（${fmtKm(nr.total)}km・約${Math.round(nr.total / WALK_SPEED / 60)}分）`);
+  } catch (e) { toast(e.message, true); }
+  finally { $("#btnGoHome").disabled = false; }
+}
+
+// ---------- おみやげ ----------
+// ひとり散歩で「土産」ボタンで撮った写真。夫婦用では、同期で相手のアプリにも届く
+async function renderGifts() {
+  const box = $("#giftBox");
+  if (!box) return;
+  const all = await idb("photos", "readonly", (st) => st.getAll()).catch(() => []);
+  const me = window.Cloud && Cloud.myId ? Cloud.myId() : null;
+  const list = all.filter((p) => p.mission === "おみやげ").sort((a, b) => b.at - a.at);
+  box.innerHTML = "";
+  const fromPartner = list.filter((p) => p.owner && me && p.owner !== me).length;
+  box.appendChild(mkEl("small muted", list.length
+    ? `${list.length}枚${fromPartner ? `（パートナーから${fromPartner}枚）` : ""}`
+    : "ひとりで散歩するときに、パートナーが好きそうなものを「土産」ボタンで撮ると、ここにたまります"));
+  const grid = mkEl("zukangrid");
+  list.forEach((p) => {
+    const b = document.createElement("button");
+    b.className = "zukanitem";
+    const pic = mkEl("zukanpic");
+    pic.style.backgroundImage = `url(${blobUrl(photoBlob(p))})`;
+    b.append(pic, mkEl("zukanname", p.owner && me && p.owner !== me ? `${Cloud.partnerName() || "パートナー"}から` : "自分から"), mkEl("zukancat", fmtDate(p.at)));
+    b.onclick = () => openViewer(p);
+    grid.appendChild(b);
+  });
+  box.appendChild(grid);
+}
+
+// ---------- マイ地図ぬりつぶし ----------
+// 家のまわり2kmの道（地図タイルの道路）を25mのマスに分け、歩いたマスの割合を出す
+const NURI_R = 2000, NURI_ROADS = /^(primary|secondary|tertiary|minor|path|pedestrian|living_street|busway)$/;
+let nuriRoads = { key: null, cells: null };
+async function renderNuri(walked) {
+  const el = $("#nuriText"), home = plan.home;
+  if (!el || !home) return;
+  const key = `${home[0].toFixed(3)},${home[1].toFixed(3)}`;
+  if (nuriRoads.key !== key) {
+    el.textContent = "家のまわりの道を数えています…";
+    const lines = await tilesAround(home, NURI_R, (bytes, z, x, y) => decodeTileLines(bytes, "transportation", z, x, y)).catch(() => []);
+    const cells = new Set();
+    lines.filter((l) => NURI_ROADS.test(l.props.class) && !l.props.brunnel).forEach((l) => {
+      const c = l.coords;
+      for (let i = 1; i < c.length; i++) {
+        const n = Math.max(1, Math.ceil(dist(c[i - 1], c[i]) / 10));
+        for (let j = 0; j <= n; j++) {
+          const q = [c[i - 1][0] + (c[i][0] - c[i - 1][0]) * (j / n), c[i - 1][1] + (c[i][1] - c[i - 1][1]) * (j / n)];
+          if (dist(home, q) <= NURI_R) cells.add(cellOf(q).join());
+        }
+      }
+    });
+    nuriRoads = { key, cells };
+  }
+  const roads = nuriRoads.cells;
+  if (!roads || !roads.size) { el.textContent = ""; return; }
+  let hit = 0;
+  roads.forEach((k) => {
+    const [y, x] = k.split(",").map(Number);
+    for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) if (walked.has(`${y + dy},${x + dx}`)) { hit++; return; }
+  });
+  const pct = Math.round((hit / roads.size) * 1000) / 10, prev = store.get("nuri", null);
+  store.set("nuri", { pct, best: Math.max(pct, (prev && prev.best) || 0), at: Date.now() });
+  const up = prev && pct > prev.pct ? `（前回から＋${(Math.round((pct - prev.pct) * 10) / 10).toFixed(1)}%）` : "";
+  const next = [1, 3, 5, 10, 15, 20, 30, 40, 50, 60, 70, 80, 90, 100].find((g) => g > pct);
+  el.textContent = `マイ地図ぬりつぶし：家のまわり2kmの道の${pct.toFixed(1)}%を歩きました${up}。${next ? `次の目標は${next}%` : "ぜんぶ歩きました！"}`;
+}
+
 // ---------- 起動 ----------
 function init() {
   try { navigator.storage && navigator.storage.persist && navigator.storage.persist(); } catch {}
@@ -3941,6 +4118,8 @@ function init() {
     if (walk && walk.sim) { e.preventDefault(); toast("家で試すときは使えません。本番の散歩で使えます"); return; }
     photoFor = label; collFor = kind; bingoPhotoFor = null; kotobaFor = null; zukanFor = null;
   }));
+  $("#btnGift").addEventListener("click", () => { photoFor = "おみやげ"; collFor = null; bingoPhotoFor = null; kotobaFor = null; zukanFor = null; revisitShot = false; });
+  $("#btnGoHome").onclick = goHome;
   $("#collSave").onclick = saveColl;
   $("#collCancel").onclick = () => { $("#collSheet").hidden = true; collPending = null; toast("写真は散歩の写真として残っています"); };
   $("#btnShoot").addEventListener("click", () => {
