@@ -767,20 +767,28 @@ function spreadByDir(list, from, n) {
 
 // Googleマップで、その場所の周りを店名で探すリンク（写真や口コミを確かめられる）
 const gmapUrl = (name, pos) => `https://www.google.com/maps/search/${encodeURIComponent(name)}/@${pos[0].toFixed(6)},${pos[1].toFixed(6)},18z`;
-// 候補の1行：選ぶボタンと、Googleマップのリンクを横に並べる
+// 候補のカード：方角の矢印・名前・種類・距離と、Googleマップのリンク。横にスワイプして選ぶ
 function candidateRow(c, on, typeLabel, onPick) {
-  const row = document.createElement("div");
-  row.className = "candrow" + (on ? " on" : "");
+  const card = document.createElement("div");
+  card.className = "candcard" + (on ? " on" : "");
   const b = document.createElement("button");
-  b.className = on ? "on" : "";
-  b.innerHTML = `<span></span><span class="d">${typeLabel ? typeLabel + "・" : ""}スタートから${plan.home ? dir8(bearing(plan.home, c.pos)) + "へ" : ""}${fmtKm(c.d)}km</span>`;
-  b.firstChild.textContent = c.name;
+  const deg = plan.home ? bearing(plan.home, c.pos) : 0;
+  b.innerHTML = `<span class="arrow" aria-hidden="true">↑</span><span class="cname"></span><span class="ckind"></span><span class="d">${plan.home ? dir8(deg) + "へ " : ""}${fmtKm(c.d)}km</span>`;
+  b.querySelector(".arrow").style.transform = `rotate(${Math.round(deg)}deg)`;
+  b.querySelector(".cname").textContent = c.name;
+  b.querySelector(".ckind").textContent = on ? "えらんでいます" : typeLabel || "";
   b.onclick = onPick;
   const a = document.createElement("a");
   a.className = "gmap"; a.href = gmapUrl(c.name, c.pos); a.target = "_blank"; a.rel = "noopener";
-  a.textContent = "地図"; a.setAttribute("aria-label", `${c.name}をGoogleマップで見る`);
-  row.append(b, a);
-  return row;
+  a.textContent = "Googleマップで見る"; a.setAttribute("aria-label", `${c.name}をGoogleマップで見る`);
+  card.append(b, a);
+  return card;
+}
+// カードの並びを整える：横スクロールにして、選んでいるカードを見える位置に
+function cardsReady(box) {
+  box.classList.add("cards");
+  const on = box.querySelector(".candcard.on");
+  if (on) requestAnimationFrame(() => box.scrollTo({ left: on.offsetLeft - 16, behavior: "smooth" }));
 }
 
 function renderCandidates() {
@@ -789,8 +797,9 @@ function renderCandidates() {
   if (plan.stop === "none") return;
   if (!plan.candidates.length) return;
   plan.candidates.forEach((c) => {
-    box.appendChild(candidateRow(c, plan.chosen && plan.chosen.id === c.id, plan.stop === "any" ? STOP_TYPES[c.type].label : "", () => chooseCandidate(c)));
+    box.appendChild(candidateRow(c, plan.chosen && plan.chosen.id === c.id, STOP_TYPES[c.type || plan.stop].label, () => chooseCandidate(c)));
   });
+  cardsReady(box);
 }
 function chooseCandidate(c) { plan.chosen = c; renderCandidates(); buildRoute(); }
 
@@ -863,6 +872,7 @@ function renderDestCands() {
   list.forEach((c) => {
     box.appendChild(candidateRow(c, same(plan.dest, c), c.label || "", () => chooseDest(c)));
   });
+  cardsReady(box);
 }
 // 目的地のおすすめ：スタート地点から8つの方角それぞれで、歩いて20〜30分くらいの神社・お寺・公園などを1つずつ。
 // 検索サービスは続けて聞くと断られるので、地図タイルに入っている場所から選ぶ
@@ -2038,8 +2048,9 @@ function renderMeetCands() {
   const box = $("#meetCands");
   box.innerHTML = "";
   plan.meetCands.forEach((c) => {
-    box.appendChild(candidateRow(c, plan.meetChosen && plan.meetChosen.id === c.id, plan.meet === "any" ? STOP_TYPES[c.type].label : "", () => { plan.meetChosen = c; renderMeetCands(); buildRoute(); }));
+    box.appendChild(candidateRow(c, plan.meetChosen && plan.meetChosen.id === c.id, STOP_TYPES[c.type || plan.meet].label, () => { plan.meetChosen = c; renderMeetCands(); buildRoute(); }));
   });
+  cardsReady(box);
 }
 
 async function onMake() {
