@@ -37,3 +37,10 @@ INV=$($AWS cloudfront create-invalidation --distribution-id "$DIST" --paths "/*"
 $AWS cloudfront wait invalidation-completed --distribution-id "$DIST" --id "$INV"
 echo "中継サーバーのファイルを入れ替えました"
 echo "公開しました: $(python3 -c 'import re;t=open("cloud-config.js").read();print(re.search(r"\"site\": \"([^\"]+)\"",t).group(1))')"
+
+# 更新のお知らせ：NOTE="気まま散歩を追加" のように内容を書いて実行すると、通知をオンにしている人のスマホに届く
+if [ -n "${NOTE:-}" ]; then
+  python3 -c 'import json,sys;print(json.dumps({"kind":"announce","text":sys.argv[1]}, ensure_ascii=False))' "$NOTE" > /tmp/futari-announce.json
+  $AWS lambda invoke --function-name futari-sanpo-weekly --cli-binary-format raw-in-base64-out --payload fileb:///tmp/futari-announce.json /tmp/futari-announce-out.json --query StatusCode --output text >/dev/null
+  echo "更新のお知らせを送りました: $(cat /tmp/futari-announce-out.json)"
+fi

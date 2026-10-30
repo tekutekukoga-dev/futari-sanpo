@@ -350,6 +350,19 @@ async function fineDay(when) {
   return { people: people.length, sent };
 }
 
+async function announce(text) {
+  if (!text) return { sent: 0 };
+  const users = new Set();
+  let start;
+  do {
+    const r = await ddb.send(new ScanCommand({ TableName: TABLE, FilterExpression: "begins_with(sk, :s)", ExpressionAttributeValues: { ":s": "PUSH#" }, ExclusiveStartKey: start }));
+    (r.Items || []).forEach((x) => users.add(x.pk.slice(5)));
+    start = r.LastEvaluatedKey;
+  } while (start);
+  for (const u of users) await pushTo(u, { title: "ふたり散歩をアップデートしました", body: `${text}。アプリを開くと新しい版になります`, tag: "update" });
+  return { sent: users.size };
+}
+
 // 相手に知らせる。kind ごとに間隔をあける（写真は10分に1回まで）
 async function notifyPartner(sub, pairId, kind, make) {
   const partner = await partnerOf(sub, pairId);
@@ -475,6 +488,8 @@ async function writeDiary(sub, b) {
 export const weekly = async (event) => {
   // 同じ関数を、散歩日和の知らせ（前日20時・当日8時）にも使う
   if (event?.kind === "fineday") return fineDay(event.when);
+  // アプリを更新したときのお知らせ（公開スクリプトから呼ぶ）。通知をオンにしている全員に送る
+  if (event?.kind === "announce") return announce(String(event.text || "").slice(0, 120));
   const pairs = [];
   let start;
   do {
