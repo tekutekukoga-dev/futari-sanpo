@@ -10,7 +10,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+JP:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
 <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
-<link rel="stylesheet" href="style.css?v=45">
+<link rel="stylesheet" href="style.css?v=46">
 </head>
 <body>
 
@@ -23,6 +23,11 @@
 
   <div class="mapcard">
     <div id="planMap" class="map"></div>
+    <div id="planBusy" class="planbusy" hidden role="status" aria-live="polite">
+      <div class="busyfeet" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+      <b id="planBusyTitle">ルートを作っています</b>
+      <span id="planBusySub"></span>
+    </div>
     <p class="maphint" id="mapHint">地図をタップすると、そこをスタート地点にできます</p>
   </div>
 
@@ -50,7 +55,7 @@
       <div id="destBox" class="meetbox" hidden>
         <span class="itemlabel">目的地</span>
         <form id="destForm" class="destsearch"><input id="destInput" class="field" type="search" enterkeyhint="search" placeholder="駅・お店・公園の名前など"><button class="secondary" type="submit">探す</button></form>
-        <p class="small muted">地図をタップしても選べます</p>
+        <p class="small muted">地図をタップしても選べます。<button id="btnSuggest" class="link" type="button">東西南北のおすすめを出す</button></p>
         <div id="destCands" class="candidates"></div>
         <span class="itemlabel">帰り方</span>
         <div class="seg" id="segBack">
@@ -89,6 +94,8 @@
         <div id="meetCands" class="candidates"></div>
       </div>
     </div>
+    <details class="more">
+    <summary>こまかい設定（はじめての道・曲がり角・テーマ・お題の数）</summary>
     <div class="item">
       <label class="itemlabel" for="chkFresh">はじめての道を多めに<br><span class="small">これまでに歩いた道を、なるべく通らないルートにします</span></label>
       <input type="checkbox" id="chkFresh" class="toggle" switch>
@@ -109,6 +116,7 @@
         <button data-v="5">多め</button><button data-v="8">ふつう</button><button data-v="12">少なめ</button>
       </div>
     </div>
+    </details>
   </div>
   <button id="btnMake" class="primary">ルートを作る</button>
   <button id="btnPaste" class="link pastelink">パートナーから届いたリンクを開く</button>
@@ -161,6 +169,7 @@
 
   <div class="mapwrap" id="mapWrap">
     <div id="walkMap"></div>
+    <div id="peekNote" class="peeknote" hidden role="status" aria-live="polite"><span id="peekText"></span></div>
     <div class="mapbtns">
       <button class="iconbtn" id="btnHeading" aria-label="地図の向き">↑</button>
       <button class="iconbtn" id="btnHelp2" aria-label="使い方">？</button>
@@ -338,6 +347,16 @@
     <div id="reviewBody"></div>
   </div>
 </div>
+<div id="shareSheet" class="overlay" hidden>
+  <div class="guidebox">
+    <h3>ルートを送る</h3>
+    <p id="shareSheetMsg"></p>
+    <div class="actions">
+      <button id="shareSheetGo" class="primary">リンクを送る</button>
+      <button id="shareSheetClose" class="secondary">閉じる</button>
+    </div>
+  </div>
+</div>
 <div id="walkReturn" class="walkreturn" hidden><span>散歩中です</span><button id="btnWalkReturn" class="primary">散歩にもどる</button></div>
 <div id="kotobaOverlay" class="overlay" hidden>
   <div class="guidebox bingobox">
@@ -396,8 +415,8 @@
 <div id="updateBar" class="updatebar" hidden><span>新しい版があります</span><button id="btnUpdate" class="primary">更新する</button></div>
 
 <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
-<script src="missions.js?v=45"></script>
-<script src="badges.js?v=45"></script>
-<script src="app.js?v=45"></script>
+<script src="missions.js?v=46"></script>
+<script src="badges.js?v=46"></script>
+<script src="app.js?v=46"></script>
 </body>
 </html>
