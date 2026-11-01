@@ -2947,6 +2947,7 @@ async function finishWalk(early) {
   buzz([200, 100, 400]);
   walk = null;
   openDetail(record.id);
+  if (!w.sim && record.distance > 100) feedPet(record);
   if (window.Cloud) { Cloud.stopSharing(); Cloud.sync(true).then(() => !record.sim && record.distance > 300 && Cloud.diary(record.id, true)); }
 }
 
@@ -3992,6 +3993,7 @@ function showView(name) {
   $("#walkReturn").hidden = !walking || name === "walk";
   $$("#tabs button").forEach((b) => b.classList.toggle("on", b.dataset.tab === (name === "detail" ? "album" : name)));
   if (name === "plan" && planMap) setTimeout(() => planMap.resize(), 50);
+  if (name === "plan") renderPet();
   if (name === "album") renderAlbum();
   window.scrollTo(0, 0);
 }
@@ -4165,11 +4167,112 @@ async function renderNuri(walked) {
   el.textContent = `マイ地図ぬりつぶし：家のまわり2kmの道の${pct.toFixed(1)}%を歩きました${up}。${next ? `次の目標は${next}%` : "ぜんぶ歩きました！"}`;
 }
 
+// ---------- なかま（散歩でお世話するペンギン・ねこ） ----------
+// 元気は1日に12ずつ減り、散歩で歩いた分だけ戻る（2kmで+50くらい）。0になっても、いなくなったりはしない
+const PETS = {
+  penguin: { label: "ペンギン", name: "ペン太", food: "おさかな", unit: "匹", per: 3,
+    stages: [[0, "ちびペンギン"], [10, "こペンギン"], [30, "ペンギン"], [100, "皇帝ペンギン"], [300, "伝説のペンギン"]],
+    say: { great: ["さんぽ、たのしかったね！", "つぎはどこ行く？", "ペタペタ歩くの、だいすき", "おなかいっぱい。ありがと！"], ok: ["そろそろ、おさんぽ行きたいな", "外の空気、すいたいな", "きょうはどの道にする？"], low: ["おなか、すいた…（おさかな食べたい）", "ちょっとだけでも、歩こう？", "5分でいいから、外に出たいな"], zero: ["ぐったり…。5分のさんぽでいいから…", "……（おさかなの夢を見ている）"] } },
+  cat: { label: "ねこ", name: "たま", food: "かつおぶし", unit: "袋", per: 2,
+    stages: [[0, "こねこ"], [10, "ねこ"], [30, "ボスねこ"], [100, "町の守り神ねこ"], [300, "ねこ仙人"]],
+    say: { great: ["にゃ。きょうの道、よかった", "ごろごろ…（満足そう）", "また、あの塀の上を歩きたい", "かつおぶし、うまかった"], ok: ["外のにおい、かぎたいにゃ", "ひなたぼっこ、行かない？", "にゃーん（さんぽの催促）"], low: ["かつおぶし…ほしい…", "ちょっとだけ外、行こ？", "ひまだにゃ…"], zero: ["……（ぐったり）。ちょっとでいいから歩いて…", "にゃ…（元気がない）"] } },
+};
+const petGet = () => store.get("pet", null);
+// いまの元気（最後に記録したときから、時間がたった分だけ減らす）
+function petGenki(p) { return Math.max(0, Math.min(100, p.genki - ((Date.now() - p.at) / 36e5) * 0.5)); }
+function petStage(p) { const st = PETS[p.kind].stages; let i = 0; while (i + 1 < st.length && p.km >= st[i + 1][0]) i++; return { name: st[i][1], next: st[i + 1] || null, from: st[i][0] }; }
+const petMood = (g) => (g >= 70 ? "great" : g >= 35 ? "ok" : g >= 5 ? "low" : "zero");
+// 表情は目と口で変える（元気なら笑顔、元気がないとしょんぼり）
+function petSvg(kind, mood) {
+  const eyes = mood === "great" ? `<path d="M37 41q3-4 6 0M57 41q3-4 6 0" stroke="#111" stroke-width="2.4" fill="none" stroke-linecap="round"/>`
+    : mood === "zero" ? `<path d="M36 42h7M57 42h7" stroke="#111" stroke-width="2.4" stroke-linecap="round"/>`
+    : mood === "low" ? `<circle cx="40" cy="42" r="2.6" fill="#111"/><circle cx="60" cy="42" r="2.6" fill="#111"/><path d="M35 37l8-3M65 37l-8-3" stroke="#111" stroke-width="2" stroke-linecap="round"/>`
+    : `<circle cx="40" cy="41" r="3" fill="#111"/><circle cx="60" cy="41" r="3" fill="#111"/>`;
+  const cheek = mood === "great" ? `<circle cx="33" cy="49" r="3.5" fill="#f4a6a6" opacity=".8"/><circle cx="67" cy="49" r="3.5" fill="#f4a6a6" opacity=".8"/>` : "";
+  if (kind === "cat") {
+    const mouth = mood === "great" || mood === "ok" ? `<path d="M46 52q4 4 8 0" stroke="#111" stroke-width="2" fill="none" stroke-linecap="round"/>` : `<path d="M46 55q4-3 8 0" stroke="#111" stroke-width="2" fill="none" stroke-linecap="round"/>`;
+    return `<svg viewBox="0 0 100 100" aria-hidden="true"><path d="M78 86q16-6 12-24" stroke="#e8a14a" stroke-width="7" fill="none" stroke-linecap="round"/><ellipse cx="50" cy="78" rx="26" ry="18" fill="#e8a14a"/><path d="M24 30 28 8 44 22ZM76 30 72 8 56 22Z" fill="#e8a14a"/><circle cx="50" cy="42" r="26" fill="#f0b25e"/><path d="M28 14l3 11 8-5zM72 14l-3 11-8-5z" fill="#f6c9c9"/>${eyes}${cheek}<path d="M48 48h4l-2 2.5z" fill="#c05a5a"/>${mouth}<path d="M20 44h10M20 50h10M70 44h10M70 50h10" stroke="#8a5a2a" stroke-width="1.4" stroke-linecap="round"/></svg>`;
+  }
+  const beak = mood === "great" || mood === "ok" ? `<path d="M44 50h12l-6 7z" fill="#f0a020"/>` : `<path d="M45 52h10l-5 4z" fill="#f0a020"/>`;
+  return `<svg viewBox="0 0 100 100" aria-hidden="true"><ellipse cx="38" cy="94" rx="9" ry="4" fill="#f0a020"/><ellipse cx="62" cy="94" rx="9" ry="4" fill="#f0a020"/><ellipse cx="50" cy="60" rx="32" ry="36" fill="#22303c"/><path d="M19 58q-10 14-4 26M81 58q10 14 4 26" stroke="#22303c" stroke-width="8" fill="none" stroke-linecap="round"/><ellipse cx="50" cy="66" rx="22" ry="27" fill="#fff"/><ellipse cx="50" cy="42" rx="22" ry="17" fill="#fff"/>${eyes}${cheek}${beak}</svg>`;
+}
+// 今週（月曜はじまり）に歩いた分と、今月の消費カロリー
+async function weekAndMonth() {
+  const own = ownWalks(await allWalks()).filter((w) => !w.sim);
+  const now = new Date(), mon = new Date(now.getFullYear(), now.getMonth(), now.getDate() - ((now.getDay() + 6) % 7)).getTime();
+  const m1 = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+  const min = own.filter((w) => w.startedAt >= mon).reduce((a, w) => a + (w.minutes || 0), 0);
+  const kcal = own.filter((w) => w.startedAt >= m1).reduce((a, w) => a + (w.distance / 1000) * KCAL_PER_KM, 0);
+  return { min, kcal };
+}
+const WEEK_GOAL = 150;
+async function renderPet() {
+  const box = $("#petCard");
+  if (!box) return;
+  const p = petGet();
+  box.innerHTML = "";
+  if (!p) {
+    // はじめは、お世話するなかまを選ぶ
+    box.appendChild(mkEl("pettitle", "散歩で、なかまを元気にしよう"));
+    box.appendChild(mkEl("small muted", "歩いた分だけ、ごはんをあげられます。どっちをお世話する？"));
+    const row = mkEl("petpick");
+    Object.entries(PETS).forEach(([k, d]) => {
+      const b = document.createElement("button");
+      b.className = "petchoice";
+      b.innerHTML = petSvg(k, "great");
+      b.appendChild(mkEl("small", d.label));
+      b.onclick = () => { store.set("pet", { kind: k, name: d.name, genki: 60, at: Date.now(), km: 0 }); renderPet(); };
+      row.appendChild(b);
+    });
+    box.appendChild(row);
+    return;
+  }
+  const d = PETS[p.kind], g = petGenki(p), mood = petMood(g), st = petStage(p);
+  const pic = mkEl("petpic mood-" + mood); pic.innerHTML = petSvg(p.kind, mood);
+  const lines = d.say[mood];
+  const bubble = mkEl("petsay", lines[Math.floor(Math.random() * lines.length)]);
+  pic.onclick = () => { bubble.textContent = lines[Math.floor(Math.random() * lines.length)]; pic.classList.remove("hop"); void pic.offsetWidth; pic.classList.add("hop"); };
+  const info = mkEl("petinfo");
+  const nm = document.createElement("button"); nm.className = "petname"; nm.textContent = `${p.name}（${st.name}）`;
+  nm.onclick = () => { const v = prompt("なまえをつけてね", p.name); if (v && v.trim()) { p.name = v.trim().slice(0, 12); store.set("pet", p); renderPet(); } };
+  const bar = mkEl("bar petbar"); bar.appendChild(document.createElement("span")).style.width = `${Math.max(2, g)}%`;
+  info.append(nm, mkEl("small muted", `元気 ${Math.round(g)}／100`), bar, bubble);
+  const top = mkEl("pettop"); top.append(pic, info);
+  box.appendChild(top);
+  // 週150分メーターと、からだ貯金
+  const { min, kcal } = await weekAndMonth();
+  const ring = mkEl("weekring"), pct = Math.min(1, min / WEEK_GOAL), R = 22, C = 2 * Math.PI * R;
+  ring.innerHTML = `<svg viewBox="0 0 56 56" aria-hidden="true"><circle cx="28" cy="28" r="${R}" fill="none" stroke="var(--line)" stroke-width="6"/><circle cx="28" cy="28" r="${R}" fill="none" stroke="var(--accent)" stroke-width="6" stroke-linecap="round" stroke-dasharray="${(C * pct).toFixed(1)} ${C.toFixed(1)}" transform="rotate(-90 28 28)"/></svg><b>${min}</b>`;
+  const food = FOODS.filter((f) => kcal / f.kcal >= 1).sort((a, b) => b.kcal - a.kcal)[0];
+  const health = mkEl("healthrow");
+  const wtext = mkEl("healthtext");
+  wtext.append(mkEl("small", `今週の散歩 ${min}分／${WEEK_GOAL}分`),
+    mkEl("small muted", min >= WEEK_GOAL ? "WHOがすすめる「週150分の運動」を達成！" : `WHOのおすすめ「週150分」まで、あと${WEEK_GOAL - min}分`),
+    mkEl("small", `今月のからだ貯金 ${Math.round(kcal).toLocaleString("ja-JP")}kcal${food ? `（${food.name}${fmtCount(kcal / food.kcal)}${food.unit}分）` : ""}`));
+  health.append(ring, wtext);
+  box.appendChild(health);
+  if (st.next) box.appendChild(mkEl("small muted", `あと${fmtKm((st.next[0] - p.km) * 1000)}km歩くと「${st.next[1]}」に育ちます`));
+}
+// 散歩が終わったら、歩いた分だけごはんをあげる。週150分を超えた散歩なら、ごほうびで少し多めに
+async function feedPet(record) {
+  const p = petGet();
+  if (!p) return;
+  const d = PETS[p.kind], km = record.distance / 1000, before = petGenki(p), st0 = petStage(p).name;
+  const { min } = await weekAndMonth();
+  const bonus = min >= WEEK_GOAL && min - (record.minutes || 0) < WEEK_GOAL ? 20 : 0;
+  Object.assign(p, { genki: Math.min(100, before + km * 25 + bonus), at: Date.now(), km: p.km + km });
+  store.set("pet", p);
+  const n = Math.max(1, Math.round(km * d.per)), st1 = petStage(p).name;
+  setTimeout(() => toast(`${p.name}に${d.food}を${n}${d.unit}あげました。元気 ${Math.round(before)}→${Math.round(p.genki)}${bonus ? "（週150分たっせいのごほうび付き）" : ""}`), 1500);
+  if (st1 !== st0) setTimeout(() => { buzz([100, 50, 100, 50, 300]); toast(`${p.name}が「${st1}」に育ちました！`); }, 5000);
+}
+
 // ---------- 起動 ----------
 function init() {
   try { navigator.storage && navigator.storage.persist && navigator.storage.persist(); } catch {}
   initPlanMap();
   if (plan.home) setHome(plan.home);
+  renderPet();
   const resetRoute = () => { plan.candidates = []; plan.chosen = null; plan.route = null; plan.meetCands = []; plan.meetChosen = null; renderCandidates(); renderMeetCands(); $("#routeSummary").hidden = true; showPlanError(""); drawPlan(); };
   // 歩く時間は10分〜3時間のスライダー。動かしている間は表示だけ変え、離したらルートを作り直す
   const range = $("#rangeTime");

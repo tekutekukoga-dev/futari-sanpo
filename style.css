@@ -622,3 +622,28 @@ details.more[open] > summary::before { content: "－ "; }
 
 /* 暗渠っぽいスポットの小さな印 */
 .pin.meguri.mini { width: 22px; height: 22px; padding: 0; display: grid; place-items: center; border-radius: 50%; font-size: 11px; cursor: pointer; }
+
+/* なかま（ペンギン・ねこ）と、週150分メーター */
+.petcard { background: var(--surface); border: 1px solid var(--fg); padding: 12px 14px; margin-bottom: 12px; display: flex; flex-direction: column; gap: 8px; }
+.pettitle { font-weight: 700; }
+.petpick { display: flex; gap: 12px; }
+.petchoice { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 10px; border: 1px solid var(--line); border-radius: 12px; }
+.petchoice svg { width: 72px; height: 72px; }
+.pettop { display: flex; gap: 12px; align-items: center; }
+.petpic { flex: none; width: 84px; height: 84px; cursor: pointer; }
+.petpic svg { width: 100%; height: 100%; }
+.petpic.mood-great svg { animation: petbob 2.4s ease-in-out infinite; }
+.petpic.mood-zero svg { transform: rotate(-8deg) translateY(4px); opacity: .85; }
+.petpic.hop svg { animation: pethop .5s ease-out; }
+@keyframes petbob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-3px); } }
+@keyframes pethop { 0% { transform: translateY(0); } 40% { transform: translateY(-12px); } 100% { transform: translateY(0); } }
+@media (prefers-reduced-motion: reduce) { .petpic svg { animation: none !important; } }
+.petinfo { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.petname { text-align: left; font-weight: 700; font-size: 15px; padding: 0; min-height: 0; }
+.petbar { height: 8px; }
+.petsay { position: relative; margin-top: 4px; background: var(--accent-soft); border-radius: 10px; padding: 6px 10px; font-size: 13px; }
+.healthrow { display: flex; gap: 12px; align-items: center; border-top: 1px solid var(--line); padding-top: 8px; }
+.weekring { position: relative; width: 56px; height: 56px; flex: none; }
+.weekring svg { width: 100%; height: 100%; }
+.weekring b { position: absolute; inset: 0; display: grid; place-items: center; font-size: 14px; font-family: var(--mono); }
+.healthtext { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
