@@ -4171,16 +4171,16 @@ async function renderNuri(walked) {
 // 元気は1日に12ずつ減り、散歩で歩いた分だけ戻る（2kmで+50くらい）。0になっても、いなくなったりはしない
 const PETS = {
   penguin: { label: "ペンギン", name: "ペン太", food: "おさかな", unit: "匹", per: 3,
-    stages: [[0, "ちびペンギン"], [10, "こペンギン"], [30, "ペンギン"], [100, "皇帝ペンギン"], [300, "伝説のペンギン"]],
+    stages: [[0, "ちびペンギン"], [1, "よちよちペンギン"], [3, "ふわふわペンギン"], [5, "おでかけデビュー"], [8, "こペンギン"], [12, "ペタペタ名人"], [18, "わかペンギン"], [25, "一人前ペンギン"], [35, "散歩好きペンギン"], [50, "ベテランペンギン"], [70, "マフラーペンギン"], [100, "皇帝ペンギン"], [150, "南極の英雄"], [220, "氷の王"], [300, "伝説のペンギン"], [500, "宇宙ペンギン"]],
     say: { great: ["さんぽ、たのしかったね！", "つぎはどこ行く？", "ペタペタ歩くの、だいすき", "おなかいっぱい。ありがと！"], ok: ["そろそろ、おさんぽ行きたいな", "外の空気、すいたいな", "きょうはどの道にする？"], low: ["おなか、すいた…（おさかな食べたい）", "ちょっとだけでも、歩こう？", "5分でいいから、外に出たいな"], zero: ["ぐったり…。5分のさんぽでいいから…", "……（おさかなの夢を見ている）"] } },
   cat: { label: "ねこ", name: "たま", food: "かつおぶし", unit: "袋", per: 2,
-    stages: [[0, "こねこ"], [10, "ねこ"], [30, "ボスねこ"], [100, "町の守り神ねこ"], [300, "ねこ仙人"]],
+    stages: [[0, "こねこ"], [1, "よちよちこねこ"], [3, "いたずらこねこ"], [5, "塀のぼり見習い"], [8, "わかねこ"], [12, "ねこ"], [18, "路地裏ねこ"], [25, "なわばりねこ"], [35, "散歩ねこ"], [50, "ボスねこ"], [70, "町のボスねこ"], [100, "町の守り神ねこ"], [150, "招きねこ"], [220, "化けねこ"], [300, "ねこ仙人"], [500, "ねこ神さま"]],
     say: { great: ["にゃ。きょうの道、よかった", "ごろごろ…（満足そう）", "また、あの塀の上を歩きたい", "かつおぶし、うまかった"], ok: ["外のにおい、かぎたいにゃ", "ひなたぼっこ、行かない？", "にゃーん（さんぽの催促）"], low: ["かつおぶし…ほしい…", "ちょっとだけ外、行こ？", "ひまだにゃ…"], zero: ["……（ぐったり）。ちょっとでいいから歩いて…", "にゃ…（元気がない）"] } },
 };
 const petGet = () => store.get("pet", null);
 // いまの元気（最後に記録したときから、時間がたった分だけ減らす）
 function petGenki(p) { return Math.max(0, Math.min(100, p.genki - ((Date.now() - p.at) / 36e5) * 0.5)); }
-function petStage(p) { const st = PETS[p.kind].stages; let i = 0; while (i + 1 < st.length && p.km >= st[i + 1][0]) i++; return { name: st[i][1], next: st[i + 1] || null, from: st[i][0] }; }
+function petStage(p) { const st = PETS[p.kind].stages; let i = 0; while (i + 1 < st.length && p.km >= st[i + 1][0]) i++; return { name: st[i][1], next: st[i + 1] || null, from: st[i][0], lv: i + 1 }; }
 const petMood = (g) => (g >= 70 ? "great" : g >= 35 ? "ok" : g >= 5 ? "low" : "zero");
 // 表情は目と口で変える（元気なら笑顔、元気がないとしょんぼり）
 function petSvg(kind, mood) {
@@ -4210,18 +4210,24 @@ async function renderPet() {
   const box = $("#petCard");
   if (!box) return;
   const p = petGet();
+  // 先に数字を集めてから描く（続けて呼ばれても、中身が二重にならないように）
+  const wm = p ? await weekAndMonth() : null;
   box.innerHTML = "";
   if (!p) {
     // はじめは、お世話するなかまを選ぶ
     box.appendChild(mkEl("pettitle", "散歩で、なかまを元気にしよう"));
     box.appendChild(mkEl("small muted", "歩いた分だけ、ごはんをあげられます。どっちをお世話する？"));
+    box.appendChild(mkEl("small petwarn", "一度えらぶと、あとから変えられません"));
     const row = mkEl("petpick");
     Object.entries(PETS).forEach(([k, d]) => {
       const b = document.createElement("button");
       b.className = "petchoice";
       b.innerHTML = petSvg(k, "great");
       b.appendChild(mkEl("small", d.label));
-      b.onclick = () => { store.set("pet", { kind: k, name: d.name, genki: 60, at: Date.now(), km: 0 }); renderPet(); };
+      b.onclick = () => {
+        if (!confirm(`${d.label}をお世話しますか？\n一度えらぶと、あとから変えることはできません。`)) return;
+        store.set("pet", { kind: k, name: d.name, genki: 60, at: Date.now(), km: 0 }); renderPet();
+      };
       row.appendChild(b);
     });
     box.appendChild(row);
@@ -4233,14 +4239,14 @@ async function renderPet() {
   const bubble = mkEl("petsay", lines[Math.floor(Math.random() * lines.length)]);
   pic.onclick = () => { bubble.textContent = lines[Math.floor(Math.random() * lines.length)]; pic.classList.remove("hop"); void pic.offsetWidth; pic.classList.add("hop"); };
   const info = mkEl("petinfo");
-  const nm = document.createElement("button"); nm.className = "petname"; nm.textContent = `${p.name}（${st.name}）`;
+  const nm = document.createElement("button"); nm.className = "petname"; nm.textContent = `${p.name}（Lv.${st.lv} ${st.name}）`;
   nm.onclick = () => { const v = prompt("なまえをつけてね", p.name); if (v && v.trim()) { p.name = v.trim().slice(0, 12); store.set("pet", p); renderPet(); } };
   const bar = mkEl("bar petbar"); bar.appendChild(document.createElement("span")).style.width = `${Math.max(2, g)}%`;
   info.append(nm, mkEl("small muted", `元気 ${Math.round(g)}／100`), bar, bubble);
   const top = mkEl("pettop"); top.append(pic, info);
   box.appendChild(top);
   // 週150分メーターと、からだ貯金
-  const { min, kcal } = await weekAndMonth();
+  const { min, kcal } = wm;
   const ring = mkEl("weekring"), pct = Math.min(1, min / WEEK_GOAL), R = 22, C = 2 * Math.PI * R;
   ring.innerHTML = `<svg viewBox="0 0 56 56" aria-hidden="true"><circle cx="28" cy="28" r="${R}" fill="none" stroke="var(--line)" stroke-width="6"/><circle cx="28" cy="28" r="${R}" fill="none" stroke="var(--accent)" stroke-width="6" stroke-linecap="round" stroke-dasharray="${(C * pct).toFixed(1)} ${C.toFixed(1)}" transform="rotate(-90 28 28)"/></svg><b>${min}</b>`;
   const food = FOODS.filter((f) => kcal / f.kcal >= 1).sort((a, b) => b.kcal - a.kcal)[0];
@@ -4264,7 +4270,7 @@ async function feedPet(record) {
   store.set("pet", p);
   const n = Math.max(1, Math.round(km * d.per)), st1 = petStage(p).name;
   setTimeout(() => toast(`${p.name}に${d.food}を${n}${d.unit}あげました。元気 ${Math.round(before)}→${Math.round(p.genki)}${bonus ? "（週150分たっせいのごほうび付き）" : ""}`), 1500);
-  if (st1 !== st0) setTimeout(() => { buzz([100, 50, 100, 50, 300]); toast(`${p.name}が「${st1}」に育ちました！`); }, 5000);
+  if (st1 !== st0) setTimeout(() => { buzz([100, 50, 100, 50, 300]); toast(`${p.name}が「${st1}」（Lv.${petStage(p).lv}）に育ちました！`); }, 5000);
 }
 
 // ---------- 起動 ----------
