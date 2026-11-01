@@ -619,3 +619,6 @@ details.more[open] > summary::before { content: "－ "; }
 /* おみやげボタン・ぬりつぶし */
 .fab.mini.gift { bottom: 210px; background: #d9822b; }
 .nuritext { display: block; margin-top: 6px; font-size: 14px; color: var(--accent); }
+
+/* 暗渠っぽいスポットの小さな印 */
+.pin.meguri.mini { width: 22px; height: 22px; padding: 0; display: grid; place-items: center; border-radius: 50%; font-size: 11px; cursor: pointer; }
