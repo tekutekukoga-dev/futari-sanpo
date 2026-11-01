@@ -2619,6 +2619,7 @@ function onPosition(p) {
   if (dist(last, p) > 5) { walk.walked = (walk.walked || 0) + dist(last, p); walk.track.push(p); setTrack(walkMap, walk.track); }
   walkMe.setLngLat(ll(p));
   walkMap.jumpTo({ center: ll(p) });
+  petFollow(p);
 
   // めぐる場所・名所（まち図鑑）
   meguriTick(p);
@@ -2917,6 +2918,7 @@ async function finishWalk(early) {
   try { wakeLock && wakeLock.release(); } catch {}
   if (walk.watch != null) navigator.geolocation.clearWatch(walk.watch);
   const w = walk;
+  if (petMarker) { petMarker.remove(); petMarker = null; }
   const elapsed = (Date.now() - w.startedAt - w.restMs) * (w.sim ? SIM_SPEED : 1);
   // 届いたまま手をつけなかったお題も「飛ばした」として残す
   w.inbox.filter((m) => !INFO_KINDS.includes(m.kind)).forEach((m) => w.results.push({ id: m.id, kind: m.kind, cat: m.cat || null, text: m.text, outcome: "skip" }));
@@ -4331,6 +4333,43 @@ async function renderPartnerPet(box, p) {
   };
   row.append(pic, txt, go);
   box.appendChild(row);
+}
+// 散歩中、なかまが自分のうしろをついてくる。ときどき、ひとこと話す（押しても話す）
+let petMarker = null;
+const PET_WALK_SAY = {
+  penguin: ["ペタペタ…ついていくよ", "この道、はじめて？", "ちょっと待って〜", "いいにおいがする", "たのしいね！", "あ、鳥だ！", "つめたい風、すき"],
+  cat: ["にゃ（ついてきた）", "ここ、いい塀だにゃ", "ちょっと休憩しない？", "あっちに何かいる", "ふふん（ごきげん）", "日なた、あったかい", "においチェック中…"],
+};
+// 歩いてきた跡を、いまの場所から m メートルだけさかのぼった点
+function trackBehind(track, p, m) {
+  let prev = p, acc = 0;
+  for (let i = track.length - 1; i >= 0; i--) {
+    const q = track[i], d = dist(prev, q);
+    if (acc + d >= m) { const t = (m - acc) / (d || 1); return [prev[0] + (q[0] - prev[0]) * t, prev[1] + (q[1] - prev[1]) * t]; }
+    acc += d; prev = q;
+  }
+  return dest(p, 200, 8);
+}
+function petSay(text) {
+  if (!petMarker) return;
+  const el = petMarker.getElement().querySelector(".walkpetsay");
+  el.textContent = text; el.hidden = false;
+  clearTimeout(petSay.t); petSay.t = setTimeout(() => (el.hidden = true), 4000);
+}
+function petFollow(p) {
+  const pet = petGet();
+  if (!pet || !walkMap || !walk) return;
+  const at = trackBehind(walk.track, p, 24), lines = PET_WALK_SAY[pet.kind];
+  if (!petMarker) {
+    const el = mkEl("walkpet");
+    el.innerHTML = petSvg(pet.kind, petMood(petGenki(pet)), pet.wear);
+    el.appendChild(mkEl("walkpetsay")).hidden = true;
+    el.addEventListener("click", (ev) => { ev.stopPropagation(); petSay(lines[Math.floor(Math.random() * lines.length)]); });
+    petMarker = new maplibregl.Marker({ element: el }).setLngLat(ll(at)).addTo(walkMap);
+    walk.petTalkAt = walk.walked || 0;
+  } else petMarker.setLngLat(ll(at));
+  // 300m歩くごとに、ひとこと
+  if ((walk.walked || 0) - (walk.petTalkAt || 0) > 300) { walk.petTalkAt = walk.walked; petSay(lines[Math.floor(Math.random() * lines.length)]); }
 }
 // 相手のアプリに見せるための、なかまの様子
 function syncPet(p) {
