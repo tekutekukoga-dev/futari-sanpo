@@ -63,6 +63,9 @@ export const handler = async (event) => {
     if (method === "GET" && path === "/review") return json(200, await readYearReview(sub, event.queryStringParameters?.year));
     if (method === "POST" && path === "/diary") return json(200, await writeDiary(sub, body));
     if (method === "POST" && path === "/missions") return json(200, await aiMissions(sub, body));
+    if (method === "PUT" && path === "/pet") return json(200, await savePet(sub, body));
+    if (method === "GET" && path === "/pet") return json(200, await partnerPet(sub));
+    if (method === "POST" && path === "/pet/visit") return json(200, await visitPet(sub));
     return json(404, { error: "not found" });
   } catch (e) {
     if (!e.expose) console.error(e);
@@ -379,6 +382,39 @@ async function walkEvent(sub, b) {
   const pairId = await pairOf(sub);
   if (b.type === "met") await notifyPartner(sub, pairId, "met", (name) => ({ title: "合流", body: `${name}が合流場所${b.place ? `「${String(b.place).slice(0, 40)}」` : ""}に着きました` }));
   if (b.type === "branch") await notifyPartner(sub, pairId, "branch", (name) => ({ title: "別行動", body: `${name}が${b.color === "黒" ? "黒" : "青"}の道を選びました` }));
+  return { ok: true };
+}
+
+// ---------- なかま（散歩でお世話するペンギン・ねこ） ----------
+// 自分のなかまの様子だけを保存し、相手のアプリに見せる。あいさつは6時間に1回まで
+async function savePet(sub, b) {
+  const pet = { kind: b.kind === "cat" ? "cat" : "penguin", name: String(b.name || "").slice(0, 12), lv: Math.max(1, Math.min(99, Number(b.lv) || 1)), stage: String(b.stage || "").slice(0, 20), genki: Math.max(0, Math.min(100, Number(b.genki) || 0)), wear: (Array.isArray(b.wear) ? b.wear : []).slice(0, 6).map((x) => String(x).slice(0, 12)), at: Date.now() };
+  await ddb.send(new PutCommand({ TableName: TABLE, Item: { pk: `USER#${sub}`, sk: "PET", ...pet } }));
+  return { ok: true };
+}
+async function partnerPet(sub) {
+  const pairId = await pairOf(sub);
+  const partner = await partnerOf(sub, pairId);
+  const pet = partner && await getItem(`USER#${partner}`, "PET");
+  // 相手のなかまが会いに来た記録（まだ見ていないもの）を渡して、消す
+  const r = await ddb.send(new QueryCommand({ TableName: TABLE, KeyConditionExpression: "pk = :p AND begins_with(sk, :s)", ExpressionAttributeValues: { ":p": `PAIR#${pairId}`, ":s": `VISIT#${sub}#` } }));
+  const visits = (r.Items || []).map((x) => ({ at: x.createdAt, name: x.petName }));
+  await Promise.all((r.Items || []).map((x) => ddb.send(new DeleteCommand({ TableName: TABLE, Key: { pk: x.pk, sk: x.sk } }))));
+  if (!pet) return { pet: null, visits };
+  const { pk, sk, ...rest } = pet;
+  return { pet: { ...rest, owner: (await profile(partner))?.name || "あいて" }, visits };
+}
+async function visitPet(sub) {
+  const pairId = await pairOf(sub);
+  const partner = await partnerOf(sub, pairId);
+  if (!partner) throw fail(409, "相手がまだアルバムに参加していません");
+  try {
+    await ddb.send(new UpdateCommand({ TableName: TABLE, Key: { pk: `USER#${sub}`, sk: "PROFILE" }, UpdateExpression: "SET lastPetVisit = :n", ConditionExpression: "attribute_not_exists(lastPetVisit) OR lastPetVisit < :t", ExpressionAttributeValues: { ":n": Date.now(), ":t": Date.now() - 6 * 3600e3 } }));
+  } catch { throw fail(429, "さっき会いに行ったばかりです。少し時間をあけてね"); }
+  const mine = await getItem(`USER#${sub}`, "PET"), theirs = await getItem(`USER#${partner}`, "PET");
+  const at = Date.now();
+  await ddb.send(new PutCommand({ TableName: TABLE, Item: { pk: `PAIR#${pairId}`, sk: `VISIT#${partner}#${at}`, petName: mine?.name || "なかま", createdAt: at, ttl: Math.floor(at / 1000) + 7 * 86400 } }));
+  await notifyPartner(sub, pairId, "pet", (name) => ({ title: "なかまが会いに来ました", body: `${name}の${mine?.name || "なかま"}が、${theirs?.name || "あなたのなかま"}に会いに来ました。アプリを開くと、ちょっと元気になります`, tag: "pet" }));
   return { ok: true };
 }
 

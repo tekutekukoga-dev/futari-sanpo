@@ -648,3 +648,12 @@ details.more[open] > summary::before { content: "－ "; }
 .weekring b { position: absolute; inset: 0; display: grid; place-items: center; font-size: 14px; font-family: var(--mono); }
 .healthtext { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
 .petwarn { color: var(--warn, #c62828); font-weight: 700; }
+
+/* きせかえ・相手のなかま */
+.wardrobe { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.wardrobe .chip { font-size: 12px; }
+.wardrobe .chip.on { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+.partnerpet { display: flex; gap: 10px; align-items: center; border-top: 1px solid var(--line); padding-top: 8px; }
+.petpic.mini { width: 48px; height: 48px; cursor: default; }
+.partnerpet .healthtext { flex: 1; }
+.partnerpet button { flex: none; padding: 6px 10px; font-size: 13px; min-height: 0; }

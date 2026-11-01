@@ -485,5 +485,9 @@ window.Cloud = (() => {
     if (ready()) sync().then((ch) => ch && !document.getElementById("view-album").hidden && renderAlbum());
     if (ls.get("pushOn", false) && "serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
   }
-  return { init, sync, renderBox, ready, myId, nameOf, openLetters, event, renderLetter, diary, renderDiary, shareWhileApart, stopSharing, missionsFor, applyMissions, renderYear, sendPlan, checkPlan, partnerName, diaryText };
+  // なかま：自分の様子を送る／相手のなかまと、会いに来た記録を受け取る／会いに行く
+  const petSync = (p) => (ready() ? api("/pet", { method: "PUT", body: p }).catch(() => {}) : Promise.resolve());
+  const petPartner = () => (ready() ? api("/pet").catch(() => null) : Promise.resolve(null));
+  const petVisit = () => api("/pet/visit", { method: "POST" });
+  return { petSync, petPartner, petVisit, init, sync, renderBox, ready, myId, nameOf, openLetters, event, renderLetter, diary, renderDiary, shareWhileApart, stopSharing, missionsFor, applyMissions, renderYear, sendPlan, checkPlan, partnerName, diaryText };
 })();

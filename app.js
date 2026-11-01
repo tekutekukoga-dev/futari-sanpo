@@ -2466,6 +2466,7 @@ function startWalk(sim) {
     letters.forEach((l, i) => walk.inbox.unshift({ kind: "letter", id: "letter" + i, label: `${l.from}からの手紙`, text: l.text, arrivedAt: Date.now() }));
     buzz([100, 80, 100]); renderCard(); saveActive();
   });
+  addPetWishes(walk);
   if (walk.free) walk.inbox.push({ kind: "whisper", id: "free0", text: "気まま散歩のはじまり。気になる角で、好きに曲がってください。近くに見どころがあると、こっそり教えます", arrivedAt: Date.now() });
   if (walk.solo) walk.inbox.push({ kind: "gift", id: "gift0", text: `ひとり散歩の日は、おみやげ探し。パートナーが好きそうなものを見つけたら、右の「土産」ボタンで撮ろう（目標3つ）${window.Cloud ? "。撮った写真は、相手のアルバムの「おみやげ」に届きます" : "。帰ったらアルバムの「おみやげ」で見せてあげよう"}`, arrivedAt: Date.now() });
   if (walk.theme) walk.inbox.push({ kind: "theme", id: "theme", text: `今日のテーマは「${THEMES[walk.theme].label}」。${THEMES[walk.theme].desc}`, arrivedAt: Date.now() });
@@ -2828,6 +2829,7 @@ function resolve(outcome, memo) {
   if (m.kind === "spot" && outcome === "done") addZukan(m.spot, null);
   if (m.kind === "revisit") { recordSighting(m, outcome === "done", m.photoId); renderCard(); saveActive(); return; }
   if (INFO_KINDS.includes(m.kind)) { renderCard(); saveActive(); return; }
+  if (m.kind === "pet" && outcome === "done") { walk.petWishes = (walk.petWishes || 0) + 1; const p = petGet(); toast(`${p ? p.name : "なかま"}がよろこんでる！（帰ったら元気が多めに上がります）`); }
   walk.results.push({ id: m.id, kind: m.kind, cat: m.cat || null, text: m.text, outcome, memo: memo || null });
   if (outcome === "done") toast(m.kind === "talk" ? "いい時間でしたね" : m.kind === "photo" ? "いい1枚！" : "ナイス観察！");
   renderCard(); saveActive();
@@ -2922,7 +2924,7 @@ async function finishWalk(early) {
     id: w.id, startedAt: w.startedAt, endedAt: Date.now(), minutes: Math.round(elapsed / 60000),
     distance: Math.round(w.wasFree ? w.walked : early ? w.progress : w.route.total), stopName: w.stopName,
     route: (w.wasFree ? w.track : w.route.coords).filter((_, i) => i % 3 === 0), track: w.track, photos: w.photos,
-    free: !!w.wasFree, gifts: w.gifts || 0,
+    free: !!w.wasFree, gifts: w.gifts || 0, petWishes: w.petWishes || 0,
     results: w.results, sim: w.sim, night: !!w.night, theme: w.theme || null, weather: w.weather || null, seed: w.seed,
     split: w.split ? { meetName: w.split.meetName, branch: w.branch } : null,
     dest: w.route.dest ? { name: w.route.dest.name, back: w.route.dest.back } : null,
@@ -4183,7 +4185,35 @@ function petGenki(p) { return Math.max(0, Math.min(100, p.genki - ((Date.now() -
 function petStage(p) { const st = PETS[p.kind].stages; let i = 0; while (i + 1 < st.length && p.km >= st[i + 1][0]) i++; return { name: st[i][1], next: st[i + 1] || null, from: st[i][0], lv: i + 1 }; }
 const petMood = (g) => (g >= 70 ? "great" : g >= 35 ? "ok" : g >= 5 ? "low" : "zero");
 // 表情は目と口で変える（元気なら笑顔、元気がないとしょんぼり）
-function petSvg(kind, mood) {
+// きせかえ。レベルでもらえるものと、その季節に散歩するともらえるもの。部位ごとに1つずつ着られる
+const WEAR = [
+  { id: "ribbon", slot: "head", lv: 2, label: "リボン" }, { id: "cap", slot: "head", lv: 4, label: "ぼうし" },
+  { id: "scarf", slot: "neck", lv: 6, label: "マフラー" }, { id: "bag", slot: "back", lv: 8, label: "リュック" },
+  { id: "glasses", slot: "face", lv: 10, label: "めがね" }, { id: "crown", slot: "head", lv: 12, label: "王冠" },
+  { id: "bowtie", slot: "neck", lv: 14, label: "ちょうネクタイ" }, { id: "cape", slot: "back", lv: 16, label: "マント" },
+  { id: "knit", slot: "head", season: "winter", label: "ニット帽（冬）" }, { id: "sakura", slot: "head", season: "spring", label: "桜の髪かざり（春）" },
+  { id: "straw", slot: "head", season: "summer", label: "麦わらぼうし（夏）" }, { id: "momiji", slot: "head", season: "autumn", label: "もみじ（秋）" },
+];
+const petOwns = (p, lv) => WEAR.filter((w) => (w.lv && lv >= w.lv) || (p.items || []).includes(w.id));
+function wearSvg(kind, ids, back) {
+  const t = kind === "cat" ? 17 : 26, n = kind === "cat" ? 64 : 57;
+  const art = {
+    cape: `<path d="M22 50q28-10 56 0l10 44H12z" fill="#7b3fb5"/>`,
+    bag: `<path d="M77 58 68 54" stroke="#7a5230" stroke-width="3"/><rect x="76" y="56" width="16" height="20" rx="4" fill="#9b6a3a"/><rect x="79" y="62" width="10" height="5" rx="2" fill="#7a5230"/>`,
+    ribbon: `<g transform="translate(64 ${t + 3})"><path d="M0 0l-9-6v12zM0 0l9-6v12z" fill="#e24a6a"/><circle r="3" fill="#c23050"/></g>`,
+    cap: `<path d="M31 ${t + 9}q19-24 38 0z" fill="#2f6fd6"/><path d="M64 ${t + 9}h16" stroke="#2f6fd6" stroke-width="4" stroke-linecap="round"/>`,
+    crown: `<path d="M37 ${t + 5}l3-13 6 8 4-11 4 11 6-8 3 13z" fill="#f2c230" stroke="#c9961a" stroke-width="1.2" stroke-linejoin="round"/>`,
+    knit: `<path d="M30 ${t + 9}q20-28 40 0z" fill="#d8443c"/><rect x="29" y="${t + 6}" width="42" height="6" rx="3" fill="#fff"/><circle cx="50" cy="${t - 12}" r="4.5" fill="#fff"/>`,
+    straw: `<ellipse cx="50" cy="${t + 6}" rx="31" ry="5" fill="#e8c46a"/><path d="M36 ${t + 6}q14-20 28 0z" fill="#e8c46a"/><rect x="36" y="${t + 1}" width="28" height="3" fill="#d24a3a"/>`,
+    sakura: `<g transform="translate(64 ${t + 4})" fill="#f6b6c8">${[0, 72, 144, 216, 288].map((a) => `<ellipse rx="3" ry="5" transform="rotate(${a}) translate(0 -5)"/>`).join("")}<circle r="2.2" fill="#e2708e"/></g>`,
+    momiji: `<path transform="translate(63 ${t + 4})" d="M0-10 3-3 10-5 5 1 8 7 1 4 0 10-1 4-8 7-5 1-10-5-3-3z" fill="#e2572b"/>`,
+    scarf: `<path d="M27 ${n}q23 9 46 0v7q-23 9-46 0z" fill="#d8443c"/><path d="M61 ${n + 6}l5 15h-8z" fill="#d8443c"/>`,
+    bowtie: `<path d="M50 ${n + 3}l-10-6v12zM50 ${n + 3}l10-6v12z" fill="#2f6fd6"/><circle cx="50" cy="${n + 3}" r="2.6" fill="#1d4fa8"/>`,
+    glasses: `<g fill="none" stroke="#111" stroke-width="2"><circle cx="40" cy="41" r="7"/><circle cx="60" cy="41" r="7"/><path d="M47 41h6"/></g>`,
+  };
+  return (ids || []).filter((id) => (id === "cape") === !!back).map((id) => art[id] || "").join("");
+}
+function petSvg(kind, mood, wear) {
   const eyes = mood === "great" ? `<path d="M37 41q3-4 6 0M57 41q3-4 6 0" stroke="#111" stroke-width="2.4" fill="none" stroke-linecap="round"/>`
     : mood === "zero" ? `<path d="M36 42h7M57 42h7" stroke="#111" stroke-width="2.4" stroke-linecap="round"/>`
     : mood === "low" ? `<circle cx="40" cy="42" r="2.6" fill="#111"/><circle cx="60" cy="42" r="2.6" fill="#111"/><path d="M35 37l8-3M65 37l-8-3" stroke="#111" stroke-width="2" stroke-linecap="round"/>`
@@ -4191,10 +4221,10 @@ function petSvg(kind, mood) {
   const cheek = mood === "great" ? `<circle cx="33" cy="49" r="3.5" fill="#f4a6a6" opacity=".8"/><circle cx="67" cy="49" r="3.5" fill="#f4a6a6" opacity=".8"/>` : "";
   if (kind === "cat") {
     const mouth = mood === "great" || mood === "ok" ? `<path d="M46 52q4 4 8 0" stroke="#111" stroke-width="2" fill="none" stroke-linecap="round"/>` : `<path d="M46 55q4-3 8 0" stroke="#111" stroke-width="2" fill="none" stroke-linecap="round"/>`;
-    return `<svg viewBox="0 0 100 100" aria-hidden="true"><path d="M78 86q16-6 12-24" stroke="#e8a14a" stroke-width="7" fill="none" stroke-linecap="round"/><ellipse cx="50" cy="78" rx="26" ry="18" fill="#e8a14a"/><path d="M24 30 28 8 44 22ZM76 30 72 8 56 22Z" fill="#e8a14a"/><circle cx="50" cy="42" r="26" fill="#f0b25e"/><path d="M28 14l3 11 8-5zM72 14l-3 11-8-5z" fill="#f6c9c9"/>${eyes}${cheek}<path d="M48 48h4l-2 2.5z" fill="#c05a5a"/>${mouth}<path d="M20 44h10M20 50h10M70 44h10M70 50h10" stroke="#8a5a2a" stroke-width="1.4" stroke-linecap="round"/></svg>`;
+    return `<svg viewBox="0 0 100 100" aria-hidden="true">${wearSvg(kind, wear, true)}<path d="M78 86q16-6 12-24" stroke="#e8a14a" stroke-width="7" fill="none" stroke-linecap="round"/><ellipse cx="50" cy="78" rx="26" ry="18" fill="#e8a14a"/><path d="M24 30 28 8 44 22ZM76 30 72 8 56 22Z" fill="#e8a14a"/><circle cx="50" cy="42" r="26" fill="#f0b25e"/><path d="M28 14l3 11 8-5zM72 14l-3 11-8-5z" fill="#f6c9c9"/>${eyes}${cheek}<path d="M48 48h4l-2 2.5z" fill="#c05a5a"/>${mouth}<path d="M20 44h10M20 50h10M70 44h10M70 50h10" stroke="#8a5a2a" stroke-width="1.4" stroke-linecap="round"/>${wearSvg(kind, wear)}</svg>`;
   }
   const beak = mood === "great" || mood === "ok" ? `<path d="M44 50h12l-6 7z" fill="#f0a020"/>` : `<path d="M45 52h10l-5 4z" fill="#f0a020"/>`;
-  return `<svg viewBox="0 0 100 100" aria-hidden="true"><ellipse cx="38" cy="94" rx="9" ry="4" fill="#f0a020"/><ellipse cx="62" cy="94" rx="9" ry="4" fill="#f0a020"/><ellipse cx="50" cy="60" rx="32" ry="36" fill="#22303c"/><path d="M19 58q-10 14-4 26M81 58q10 14 4 26" stroke="#22303c" stroke-width="8" fill="none" stroke-linecap="round"/><ellipse cx="50" cy="66" rx="22" ry="27" fill="#fff"/><ellipse cx="50" cy="42" rx="22" ry="17" fill="#fff"/>${eyes}${cheek}${beak}</svg>`;
+  return `<svg viewBox="0 0 100 100" aria-hidden="true">${wearSvg(kind, wear, true)}<ellipse cx="38" cy="94" rx="9" ry="4" fill="#f0a020"/><ellipse cx="62" cy="94" rx="9" ry="4" fill="#f0a020"/><ellipse cx="50" cy="60" rx="32" ry="36" fill="#22303c"/><path d="M19 58q-10 14-4 26M81 58q10 14 4 26" stroke="#22303c" stroke-width="8" fill="none" stroke-linecap="round"/><ellipse cx="50" cy="66" rx="22" ry="27" fill="#fff"/><ellipse cx="50" cy="42" rx="22" ry="17" fill="#fff"/>${eyes}${cheek}${beak}${wearSvg(kind, wear)}</svg>`;
 }
 // 今週（月曜はじまり）に歩いた分と、今月の消費カロリー
 async function weekAndMonth() {
@@ -4226,7 +4256,7 @@ async function renderPet() {
       b.appendChild(mkEl("small", d.label));
       b.onclick = () => {
         if (!confirm(`${d.label}をお世話しますか？\n一度えらぶと、あとから変えることはできません。`)) return;
-        store.set("pet", { kind: k, name: d.name, genki: 60, at: Date.now(), km: 0 }); renderPet();
+        store.set("pet", { kind: k, name: d.name, genki: 60, at: Date.now(), km: 0 }); syncPet(petGet()); renderPet();
       };
       row.appendChild(b);
     });
@@ -4234,13 +4264,13 @@ async function renderPet() {
     return;
   }
   const d = PETS[p.kind], g = petGenki(p), mood = petMood(g), st = petStage(p);
-  const pic = mkEl("petpic mood-" + mood); pic.innerHTML = petSvg(p.kind, mood);
+  const pic = mkEl("petpic mood-" + mood); pic.innerHTML = petSvg(p.kind, mood, p.wear);
   const lines = d.say[mood];
   const bubble = mkEl("petsay", lines[Math.floor(Math.random() * lines.length)]);
   pic.onclick = () => { bubble.textContent = lines[Math.floor(Math.random() * lines.length)]; pic.classList.remove("hop"); void pic.offsetWidth; pic.classList.add("hop"); };
   const info = mkEl("petinfo");
   const nm = document.createElement("button"); nm.className = "petname"; nm.textContent = `${p.name}（Lv.${st.lv} ${st.name}）`;
-  nm.onclick = () => { const v = prompt("なまえをつけてね", p.name); if (v && v.trim()) { p.name = v.trim().slice(0, 12); store.set("pet", p); renderPet(); } };
+  nm.onclick = () => { const v = prompt("なまえをつけてね", p.name); if (v && v.trim()) { p.name = v.trim().slice(0, 12); store.set("pet", p); syncPet(p); renderPet(); } };
   const bar = mkEl("bar petbar"); bar.appendChild(document.createElement("span")).style.width = `${Math.max(2, g)}%`;
   info.append(nm, mkEl("small muted", `元気 ${Math.round(g)}／100`), bar, bubble);
   const top = mkEl("pettop"); top.append(pic, info);
@@ -4258,6 +4288,68 @@ async function renderPet() {
   health.append(ring, wtext);
   box.appendChild(health);
   if (st.next) box.appendChild(mkEl("small muted", `あと${fmtKm((st.next[0] - p.km) * 1000)}km歩くと「${st.next[1]}」に育ちます`));
+  renderWardrobe(box, p, st);
+  renderPartnerPet(box, p);
+}
+// きせかえ：持っているものを押すと着る／脱ぐ（同じ部位のものは入れかわる）
+function renderWardrobe(box, p, st) {
+  const owned = petOwns(p, st.lv), next = WEAR.filter((w) => w.lv && w.lv > st.lv)[0];
+  const row = mkEl("wardrobe");
+  row.appendChild(mkEl("small muted", owned.length ? "きせかえ：" : `Lv.${next.lv}で「${next.label}」がもらえます`));
+  owned.forEach((w) => {
+    const b = document.createElement("button");
+    const on = (p.wear || []).includes(w.id);
+    b.className = "chip" + (on ? " on" : ""); b.textContent = w.label;
+    b.onclick = () => {
+      p.wear = on ? (p.wear || []).filter((x) => x !== w.id) : [...(p.wear || []).filter((x) => WEAR.find((y) => y.id === x).slot !== w.slot), w.id];
+      store.set("pet", p); syncPet(p); renderPet();
+    };
+    row.appendChild(b);
+  });
+  if (owned.length && next) row.appendChild(mkEl("small muted", `（Lv.${next.lv}で${next.label}）`));
+  box.appendChild(row);
+}
+// 夫婦用：相手のなかまの様子と、会いに行くボタン。相手のなかまが会いに来ていたら、少し元気になる
+async function renderPartnerPet(box, p) {
+  if (!window.Cloud || !Cloud.ready() || !Cloud.petPartner) return;
+  const r = await Cloud.petPartner();
+  if (!r || !box.isConnected) return;
+  if (r.visits && r.visits.length) {
+    p.genki = Math.min(100, petGenki(p) + 5 * r.visits.length); p.at = Date.now(); store.set("pet", p);
+    toast(`${r.visits[0].name}が、${p.name}に会いに来てくれました！（元気＋${5 * r.visits.length}）`);
+  }
+  if (!r.pet) return;
+  const q = r.pet, row = mkEl("partnerpet");
+  const pic = mkEl("petpic mini"); pic.innerHTML = petSvg(q.kind, petMood(q.genki), q.wear);
+  const txt = mkEl("healthtext");
+  txt.append(mkEl("small", `${q.owner}の${q.name}（Lv.${q.lv} ${q.stage}）`), mkEl("small muted", `元気 ${Math.round(q.genki)}／100`));
+  const go = document.createElement("button"); go.className = "secondary small"; go.textContent = "会いに行く";
+  go.onclick = async () => {
+    go.disabled = true;
+    try { await Cloud.petVisit(); toast(`${p.name}が、${q.name}に会いに行きました。${q.owner}に知らせが届きます`); go.textContent = "会いに行った"; }
+    catch (e) { toast(e.message, true); go.disabled = false; }
+  };
+  row.append(pic, txt, go);
+  box.appendChild(row);
+}
+// 相手のアプリに見せるための、なかまの様子
+function syncPet(p) {
+  if (!window.Cloud || !Cloud.petSync) return;
+  const st = petStage(p);
+  Cloud.petSync({ kind: p.kind, name: p.name, lv: st.lv, stage: st.name, genki: Math.round(petGenki(p)), wear: p.wear || [] });
+}
+// 散歩中に、なかまからの「おねがい」を1〜2回届ける。かなえると、帰ったときに元気が多めに上がる
+const PET_WISHES = {
+  penguin: [["青いものが見たいな", "空、看板、車…。青いものは意外とたくさんあります"], ["水のあるところに行きたい（池・川・噴水・水たまり）", "ペンギンは水が大好き"], ["つめたそうなものを見つけて", "自動販売機、氷の旗、日かげの石…"], ["鳥を見たい！", "空を飛べる鳥は、ちょっとうらやましい"], ["白と黒のものを探して", "ペンギンと同じ色。横断歩道もそうです"], ["魚の絵か、魚屋さんを探して", "おさかなは、いつでも食べたい"]],
+  cat: [["高いところを見て（塀の上・屋根の上）", "ねこは高いところから町を見るのが好き"], ["日なたで、ちょっと休みたい", "日なたぼっこは、ねこの大事な仕事"], ["ほかのねこを探して", "塀の上、車の下、お店の前…"], ["細い路地に入ってみて", "ねこは近道が大好き"], ["段ボールを見つけて", "入ってみたい"], ["いいにおいのするお店を探して", "パン屋、焼き鳥屋、うなぎ屋…"]],
+};
+function addPetWishes(w) {
+  const p = petGet();
+  if (!p || w.route.total < 500) return;
+  const r = rng((w.seed || 1) ^ 0x9e7), list = shuffle(PET_WISHES[p.kind].slice(), r);
+  const ats = w.route.total < 1500 ? [0.5] : [0.32, 0.68];
+  ats.forEach((f, i) => w.events.push({ kind: "pet", id: "pet" + i, label: `${p.name}のおねがい`, text: `${p.name}「${list[i][0]}」`, tip: list[i][1], at: Math.round(w.route.total * f) }));
+  w.events.sort((a, b) => a.at - b.at);
 }
 // 散歩が終わったら、歩いた分だけごはんをあげる。週150分を超えた散歩なら、ごほうびで少し多めに
 async function feedPet(record) {
@@ -4266,10 +4358,19 @@ async function feedPet(record) {
   const d = PETS[p.kind], km = record.distance / 1000, before = petGenki(p), st0 = petStage(p).name;
   const { min } = await weekAndMonth();
   const bonus = min >= WEEK_GOAL && min - (record.minutes || 0) < WEEK_GOAL ? 20 : 0;
-  Object.assign(p, { genki: Math.min(100, before + km * 25 + bonus), at: Date.now(), km: p.km + km });
-  store.set("pet", p);
+  // おねがいをかなえた分と、ふたりで歩いた日のボーナス
+  const wish = (record.petWishes || 0) * 8, duo = record.solo ? 0 : 10;
+  const lv0 = petStage(p).lv, own0 = petOwns(p, lv0).map((w) => w.id);
+  Object.assign(p, { genki: Math.min(100, before + km * 25 + bonus + wish + duo), at: Date.now(), km: p.km + km });
+  // 季節のきせかえ：その季節に散歩すると、もらえる（Lv.2から）
+  const sk = seasonKey(new Date().getMonth() + 1), sw = WEAR.find((w) => w.season === sk);
+  if (petStage(p).lv >= 2 && sw && !(p.items || []).includes(sw.id)) p.items = [...(p.items || []), sw.id];
+  store.set("pet", p); syncPet(p);
+  const got = petOwns(p, petStage(p).lv).filter((w) => !own0.includes(w.id));
   const n = Math.max(1, Math.round(km * d.per)), st1 = petStage(p).name;
-  setTimeout(() => toast(`${p.name}に${d.food}を${n}${d.unit}あげました。元気 ${Math.round(before)}→${Math.round(p.genki)}${bonus ? "（週150分たっせいのごほうび付き）" : ""}`), 1500);
+  const extra = [bonus && "週150分たっせい", wish && "おねがいをかなえた", duo && "ふたり散歩"].filter(Boolean);
+  setTimeout(() => toast(`${p.name}に${d.food}を${n}${d.unit}あげました。元気 ${Math.round(before)}→${Math.round(p.genki)}${extra.length ? `（${extra.join("・")}のごほうび付き）` : ""}`), 1500);
+  if (got.length) setTimeout(() => toast(`きせかえ「${got.map((w) => w.label).join("」「")}」をもらいました！`), 8500);
   if (st1 !== st0) setTimeout(() => { buzz([100, 50, 100, 50, 300]); toast(`${p.name}が「${st1}」（Lv.${petStage(p).lv}）に育ちました！`); }, 5000);
 }
 

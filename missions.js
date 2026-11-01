@@ -17,6 +17,7 @@ KINDS.revisit = { label: "まだいた？", done: "まだいた！", shoot: true
 KINDS.dice = { label: "サイコロ", done: "OK", shoot: false };
 KINDS.kotoba = { label: "ことば集め", done: "あとで", shoot: true };
 KINDS.whisper = { label: "ひそひそ", done: "OK", shoot: false };
+KINDS.pet = { label: "なかまのおねがい", done: "かなえた", shoot: true };
 KINDS.gift = { label: "おみやげ探し", done: "OK", shoot: false };
 const INFO_KINDS = ["theme", "split", "choose", "letter", "dest", "kotoba", "dice", "whisper", "gift"];
 
