@@ -589,13 +589,61 @@ async function addDetour(poi) {
 }
 
 let planMap, planMarkers = [];
+// 目的地を選ぶ地図には、お店や神社などをマークと名前で出して、押せばそこが目的地になるようにする
+const POI_MARKS = [
+  ["cafe", "☕", "#a9744f", ["cafe"]], ["food", "🍴", "#e0803a", ["restaurant", "fast_food", "bar", "beer", "ice_cream"]],
+  ["shop", "🛍️", "#7a6fd0", ["shop", "grocery", "clothing_store", "bakery", "alcohol_shop", "convenience", "books", "gift", "florist"]],
+  ["shrine", "⛩️", "#d0503c", ["place_of_worship"]], ["park", "🌳", "#3f9a57", ["park", "garden", "campsite"]],
+  ["sight", "🏛️", "#3f7fc0", ["museum", "library", "art_gallery", "attraction", "castle", "monument", "viewpoint", "theatre", "cinema", "zoo", "aquarium"]],
+];
+function addPoiMarks(m) {
+  POI_MARKS.forEach(([id, emoji, color]) => {
+    const s = 64, c = document.createElement("canvas"); c.width = c.height = s;
+    const g = c.getContext("2d");
+    g.beginPath(); g.arc(s / 2, s / 2, s / 2 - 4, 0, Math.PI * 2); g.fillStyle = "#fff"; g.fill(); g.lineWidth = 5; g.strokeStyle = color; g.stroke();
+    g.font = '32px "Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji",sans-serif'; g.textAlign = "center"; g.textBaseline = "middle"; g.fillText(emoji, s / 2, s / 2 + 2);
+    m.addImage("poi-" + id, g.getImageData(0, 0, s, s), { pixelRatio: 2 });
+  });
+  const iconOf = ["match", ["get", "class"]], colorOf = ["match", ["get", "class"]], cls = [];
+  POI_MARKS.forEach(([id, , color, list]) => { iconOf.push(list, "poi-" + id); colorOf.push(list, color); cls.push(...list); });
+  iconOf.push(""); colorOf.push("#555");
+  m.addLayer({
+    id: "poi-marks", type: "symbol", source: "openmaptiles", "source-layer": "poi", minzoom: 14,
+    filter: ["all", ["has", "name"], ["match", ["get", "class"], cls, true, false]],
+    layout: {
+      "icon-image": iconOf, "icon-size": ["interpolate", ["linear"], ["zoom"], 14, 0.6, 17, 0.8], "icon-allow-overlap": false, "symbol-sort-key": ["get", "rank"],
+      "text-field": ["coalesce", ["get", "name:ja"], ["get", "name"]], "text-font": ["Noto Sans Regular"], "text-size": 11, "text-anchor": "top", "text-offset": [0, 0.9], "text-max-width": 8,
+      visibility: isDest() ? "visible" : "none",
+    },
+    paint: { "text-color": colorOf, "text-halo-color": "#fff", "text-halo-width": 1.6 },
+  });
+}
+// 押した場所のすぐ近くにあるマークを探す
+function poiAtTap(e) {
+  if (!planMap.getLayer("poi-marks")) return null;
+  const { x, y } = e.point, r = 20;
+  const list = planMap.queryRenderedFeatures([[x - r, y - r], [x + r, y + r]], { layers: ["poi-marks"] });
+  const near = (f) => { const q = planMap.project(f.geometry.coordinates); return Math.hypot(q.x - x, q.y - y); };
+  return list.sort((a, b) => near(a) - near(b))[0] || null;
+}
+function showPoiMarks() {
+  if (!planMap) return;
+  planMap.ready.then(() => {
+    if (!planMap.getLayer("poi-marks")) return;
+    planMap.setLayoutProperty("poi-marks", "visibility", isDest() ? "visible" : "none");
+    if (isDest() && plan.home && planMap.getZoom() < 15) planMap.easeTo({ zoom: 15, duration: 500 });
+  });
+}
 function initPlanMap() {
   planMap = makeMap($("#planMap"));
+  planMap.ready.then(() => addPoiMarks(planMap));
   planMap.on("click", (e) => {
     if (planBusyOn) return;
     if (plan.shared) return toast("いまはパートナーから届いたルートを表示中です。自分で作るときは「自分でルートを作る」を押してください");
     const p = [e.lngLat.lat, e.lngLat.lng];
-    if (isDest() && plan.home) pickDestOnMap(p);
+    const poi = isDest() && plan.home ? poiAtTap(e) : null;
+    if (poi) { const c = poi.geometry.coordinates; chooseDest({ name: poi.properties["name:ja"] || poi.properties.name, pos: [c[1], c[0]] }); }
+    else if (isDest() && plan.home) pickDestOnMap(p);
     else { setHome(p); if (isDest()) toast("スタート地点にしました。つぎに、行きたい場所をタップしてください"); }
   });
   drawPlan();
@@ -813,11 +861,22 @@ const midOf = (a, b) => [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
 const DEST_RANGE = 15000;
 // よく使う呼び方を、お店の正式な名前に直す
 const NICKNAMES = { "スタバ": "スターバックス", "マック": "マクドナルド", "マクド": "マクドナルド", "ケンタ": "ケンタッキー", "セブン": "セブン-イレブン", "ファミマ": "ファミリーマート", "サイゼ": "サイゼリヤ", "ミスド": "ミスタードーナツ", "モス": "モスバーガー", "無印": "無印良品", "ドンキ": "ドン・キホーテ", "マツキヨ": "マツモトキヨシ", "コンビニ": "コンビニエンスストア" };
+// 地図のデータでは英語の名前で入っている店もあるので、両方で探す
+const NAME_ALIASES = { "スターバックス": "starbucks", "マクドナルド": "mcdonald", "ケンタッキー": "kfc", "セブン-イレブン": "7-eleven", "ファミリーマート": "familymart", "ローソン": "lawson", "ミスタードーナツ": "mister donut", "モスバーガー": "mos burger", "サイゼリヤ": "saizeriya", "ドトール": "doutor", "タリーズ": "tully", "コメダ": "komeda", "無印良品": "muji", "ユニクロ": "uniqlo" };
+const normName = (t) => String(t || "").normalize("NFKC").toLowerCase().replace(/[\s・･'’.\-]/g, "");
 const NOISE = /駐車場|駐輪場|自転車|バイク|パーキング|出口|入口|口$/;
 async function searchDest(q) {
   q = q.normalize("NFKC").trim();
-  q = NICKNAMES[q] || q;
+  // 「スタバ 渋谷」のように、言葉のひとつだけが呼び名のときも直す
+  q = q.split(/\s+/).map((w) => NICKNAMES[w] || w).join(" ");
+  const first = q.split(" ")[0], alias = NAME_ALIASES[first];
+  const words = q.split(" ").map(normName), aliasWords = alias ? [normName(alias), ...words.slice(1)] : null;
+  const hits = (...names) => names.some((n0) => { const n = normName(n0); return words.every((w) => n.includes(w)) || (aliasWords && aliasWords.every((w) => n.includes(w))); });
   const [lat, lon] = plan.home;
+  // 地図タイル：検索サービスが混んでいても必ず読める。近くの店はここで必ず拾う
+  const tiles = tilesAround(plan.home, 3500, (bytes, z, x, y) => decodeTilePoints(bytes, "poi", z, x, y))
+    .then((pts) => pts.filter(({ props: pr }) => hits(pr.name, pr["name:ja"], pr["name:en"], pr.name_en, pr["name:latin"]))
+      .map(({ props: pr, lat: la, lon: lo }) => ({ id: "t" + la.toFixed(5) + lo.toFixed(5), name: pr["name:ja"] || pr.name, pos: [la, lo], area: "" }))).catch(() => []);
   const a = dest(plan.home, 315, DEST_RANGE * Math.SQRT2), b = dest(plan.home, 135, DEST_RANGE * Math.SQRT2);
   // Photon：あいまいな言葉にも強い。スタート地点のまわり15kmの四角の中だけで探す
   const photon = getJson(`${PHOTON_SEARCH}?q=${encodeURIComponent(q)}&lat=${lat.toFixed(4)}&lon=${lon.toFixed(4)}&bbox=${a[1].toFixed(4)},${b[0].toFixed(4)},${b[1].toFixed(4)},${a[0].toFixed(4)}&limit=50`)
@@ -826,30 +885,31 @@ async function searchDest(q) {
       return { id: pr.osm_type + pr.osm_id, name: pr.name || [pr.street, pr.housenumber].filter(Boolean).join(" "), pos: [f.geometry.coordinates[1], f.geometry.coordinates[0]], area: pr.district || pr.locality || pr.city || "" };
     })).catch(() => []);
   // Overpass：チェーン店の全部の店舗を名前とブランドで探す（近い10km）
-  const re = q.replace(/[.*+?^${}()|[\]\\"]/g, ""); // 記号は検索の邪魔になるので外す
-  const oq = `[out:json][timeout:8];(nwr["name"~"${re}",i](around:8000,${lat},${lon});nwr["brand"~"${re}",i](around:8000,${lat},${lon}););out tags center 80;`;
+  // 件数を区切ると近い店が落ちることがあるので、範囲の中は全部もらう
+  const re = [first, alias].filter(Boolean).join("|").replace(/[.*+?^${}()[\]\\"]/g, ""); // 記号は検索の邪魔になるので外す
+  const oq = `[out:json][timeout:8];(${["name", "brand", "name:en", "brand:en"].map((k) => `nwr["${k}"~"${re}",i](around:8000,${lat},${lon});`).join("")});out tags center;`;
   const overpassReq = getJson(OVERPASS, { method: "POST", body: "data=" + encodeURIComponent(oq), headers: { "Content-Type": "application/x-www-form-urlencoded" } })
     .then((d) => d.elements.map((e) => ({
       id: e.type[0].toUpperCase() + e.id, name: [e.tags.name || e.tags.brand, e.tags.branch && !String(e.tags.name || "").includes(e.tags.branch) ? e.tags.branch : ""].filter(Boolean).join(" "),
       pos: e.lat != null ? [e.lat, e.lon] : [e.center.lat, e.center.lon], area: e.tags["addr:quarter"] || e.tags["addr:neighbourhood"] || e.tags["addr:suburb"] || "",
     }))).catch(() => []);
   // Overpass は混んでいると遅いので、Photon の答えから4秒までしか待たない
-  const photonList = await photon;
-  const overpass = await Promise.race([overpassReq, new Promise((r) => setTimeout(() => r([]), photonList.length ? 4000 : 8000))]);
-  let list = [...overpass, ...photonList];
+  const [photonList, tileList] = await Promise.all([photon, tiles]);
+  const overpass = await Promise.race([overpassReq, new Promise((r) => setTimeout(() => r([]), tileList.length ? 1500 : photonList.length ? 4000 : 8000))]);
+  let list = [...overpass, ...tileList, ...photonList];
   if (!list.length) {
     const data = await getJson(`${NOMINATIM}?q=${encodeURIComponent(q)}&viewbox=${a[1]},${a[0]},${b[1]},${b[0]}&bounded=1&format=jsonv2&limit=40`)
       .catch(() => { throw new Error("場所を探せませんでした。電波の良いところで、もう一度お試しください"); });
     list = data.map((e) => ({ id: e.osm_type[0].toUpperCase() + e.osm_id, name: e.name, pos: [+e.lat, +e.lon], area: "" }));
   }
-  // 名前がぴったり合うもの → 名前がその言葉ではじまるもの → そのほか、の順。同じ順位なら近い順。駐車場などは後ろに
-  const tier = (c) => (NOISE.test(c.name) && !NOISE.test(q) ? 3 : c.name === q || c.name.split(" ")[0] === q ? 0 : c.name.startsWith(q) ? 1 : 2);
+  // 探した言葉を含むものを近い順に。言葉を含まないものはそのあと、駐車場などは最後に
+  const tier = (c) => (NOISE.test(c.name) && !NOISE.test(q) ? 2 : hits(c.name) ? 0 : 1);
   const out = [];
   list.filter((c) => c.name).map((c) => ({ ...c, d: dist(plan.home, c.pos), t: tier(c) }))
-    .filter((c) => c.d > 150 && c.d < DEST_RANGE)
+    .filter((c) => c.d > 20 && c.d < DEST_RANGE)
     .sort((x, y) => x.t - y.t || x.d - y.d)
-    .forEach((c) => { if (!out.some((o) => dist(o.pos, c.pos) < 40 || (o.name === c.name && dist(o.pos, c.pos) < 300))) out.push(c); });
-  return out.slice(0, 8);
+    .forEach((c) => { if (!out.some((o) => dist(o.pos, c.pos) < 40 || (o.name === c.name && dist(o.pos, c.pos) < 100))) out.push(c); });
+  return out.slice(0, 10);
 }
 async function onDestSearch(e) {
   e.preventDefault();
@@ -858,10 +918,12 @@ async function onDestSearch(e) {
   if (!plan.home) return showPlanError("先にスタート地点を決めてください");
   $("#destInput").blur();
   showPlanError("");
+  planBusy("場所を探しています", "スタート地点に近い順に並べます");
   try {
     plan.destCands = await searchDest(q);
     if (!plan.destCands.length) showPlanError("スタート地点から15km以内に見つかりませんでした。別の名前で探すか、地図をタップしてください");
   } catch (err) { showPlanError(err.message); }
+  planBusyOff();
   renderDestCands();
 }
 function renderDestCands() {
@@ -948,8 +1010,9 @@ function applyShapeUI() {
   $("#splitDestNote").hidden = !(plan.split && isDest());
   renderMeguriInfo();
   $("#btnShare").hidden = isSolo();
-  $("#mapHint").textContent = isDest() ? "地図をタップすると、そこを目的地にできます（スタート地点は「現在地にする」で変えられます）" : "地図をタップすると、そこをスタート地点にできます";
+  $("#mapHint").textContent = isDest() ? "お店や神社のマークを押すと、そこが目的地になります。マークのない場所も押して選べます（広げると、マークが増えます）" : "地図をタップすると、そこをスタート地点にできます";
   renderDestCands();
+  showPoiMarks();
 }
 function attachDest(route, idx, d) {
   route.dest = { name: d.name, pos: d.pos, back: d.back, idx, along: route.legEnds[idx - 1] };
@@ -2381,6 +2444,8 @@ function headingTick() {
   heading.target = mode === "north" ? 0 : mode === "compass" ? heading.compass : routeHeading();
   // 現在地の矢印は、地図の向きに関係なく実際に向いている方向を指す
   if (walkMe) walkMe.setRotation(heading.compass != null ? heading.compass : routeHeading());
+  // 地図を動かしている指を止めないように、そのあいだは向きを変えない
+  if (mapHeld()) return;
   // 少しずつ近づけて、地図がガタガタ回らないようにする
   let diff = ((heading.target - heading.shown + 540) % 360) - 180;
   if (Math.abs(diff) < 0.3) return;
@@ -2486,14 +2551,15 @@ function resumeWalkSession() {
   if (walk.theme) $("#themeBadge").textContent = THEMES[walk.theme].label;
   $("#btnHeading").textContent = heading.mode === "north" ? "N" : "↑";
   if (!walkMap) {
-    walkMap = makeMap($("#walkMap"), { dragPan: false, zoom: 17, center: ll(walk.pos) });
+    walkMap = makeMap($("#walkMap"), { zoom: 17, center: ll(walk.pos) });
     walkMap.scrollZoom.enable({ around: "center" });
     walkMap.touchZoomRotate.enable({ around: "center" }); walkMap.touchZoomRotate.disableRotation();
     const me = mkEl("me");
     me.innerHTML = `<svg viewBox="0 0 34 34"><path d="M17 2 24 13H10Z" fill="${TRACK_COLOR}"/><circle cx="17" cy="18" r="8" fill="${TRACK_COLOR}" stroke="#fff" stroke-width="3"/></svg>`;
     walkMe = new maplibregl.Marker({ element: me, rotationAlignment: "map" }).setLngLat(ll(walk.pos)).addTo(walkMap);
-    walkMap.on("zoom", peekCheck);
-    walkMap.on("zoomend", peekSettle);
+    walkMap.on("move", peekCheck);
+    walkMap.on("moveend", peekSettle);
+    watchMapTouch();
   }
   walkMe.setLngLat(ll(walk.pos));
   walkMap.ready.then(() => {
@@ -2533,7 +2599,7 @@ function drawWalkRoute() {
 }
 // ---------- 先のぞき禁止 ----------
 // 散歩中に地図を小さくして先の道を見ようとしたら、ひとこと言って、先の道を隠す。少したつと元の大きさに戻す
-const PEEK_ZOOM = 15.4;
+const PEEK_ZOOM = 15.4, PEEK_DIST = 120, LOOK_MS = 5000;
 const PEEK_LINES = [
   "おっと、今は散歩中だぜ。先のことより、今のことに集中しな",
   "先を急ぐな。いい散歩は、目の前の角にある",
@@ -2542,9 +2608,34 @@ const PEEK_LINES = [
   "地図ばっかり見てると、いいもの見逃すぜ。顔を上げな",
 ];
 let peeking = false, peekTimer = null;
+// 指で動かしているあいだと、離してから少しのあいだは、地図を現在地へ引き戻さない（向きも変えない）
+let mapTouching = false, mapFreeUntil = 0, recenterTimer = null;
+const mapHeld = () => mapTouching || Date.now() < mapFreeUntil;
+function watchMapTouch() {
+  const c = walkMap.getCanvasContainer();
+  const down = () => { mapTouching = true; clearTimeout(recenterTimer); clearTimeout(peekTimer); };
+  const up = () => { if (mapTouching) { mapTouching = false; mapReleased(); } };
+  c.addEventListener("touchstart", down, { passive: true });
+  c.addEventListener("touchend", (e) => { if (!e.touches.length) up(); });
+  c.addEventListener("touchcancel", (e) => { if (!e.touches.length) up(); });
+  c.addEventListener("mousedown", down);
+  window.addEventListener("mouseup", up);
+  c.addEventListener("wheel", () => { clearTimeout(recenterTimer); mapReleased(); }, { passive: true });
+}
+function mapReleased() {
+  mapFreeUntil = Date.now() + LOOK_MS;
+  clearTimeout(recenterTimer);
+  recenterTimer = setTimeout(() => { if (walk && walkMap && !mapTouching) mapBackToMe(walkMap.getZoom()); }, LOOK_MS);
+  peekSettle();
+}
+function mapBackToMe(zoom) {
+  mapFreeUntil = Date.now() + 800;
+  walkMap.easeTo({ center: ll(walk.pos), zoom, duration: 700 });
+}
 function peekCheck() {
   if (!walk || !walkMap) return;
-  const now = walkMap.getZoom() < PEEK_ZOOM;
+  const c = walkMap.getCenter();
+  const now = walkMap.getZoom() < PEEK_ZOOM || dist(walk.pos, [c.lat, c.lng]) > PEEK_DIST;
   if (now === peeking) return;
   peeking = now;
   if (now) {
@@ -2556,8 +2647,8 @@ function peekCheck() {
 }
 function peekSettle() {
   clearTimeout(peekTimer);
-  if (!peeking) return;
-  peekTimer = setTimeout(() => { if (peeking && walk) walkMap.easeTo({ center: ll(walk.pos), zoom: 16.5, duration: 700 }); }, 2200);
+  if (!peeking || mapTouching) return;
+  peekTimer = setTimeout(() => { if (peeking && walk && !mapTouching) mapBackToMe(Math.max(walkMap.getZoom(), 16.5)); }, 2200);
 }
 
 function startWatch() {
@@ -2618,7 +2709,7 @@ function onPosition(p) {
   const last = walk.track[walk.track.length - 1];
   if (dist(last, p) > 5) { walk.walked = (walk.walked || 0) + dist(last, p); walk.track.push(p); setTrack(walkMap, walk.track); }
   walkMe.setLngLat(ll(p));
-  walkMap.jumpTo({ center: ll(p) });
+  if (!mapHeld()) walkMap.jumpTo({ center: ll(p) });
   petFollow(p);
 
   // めぐる場所・名所（まち図鑑）
@@ -4198,35 +4289,45 @@ const WEAR = [
 ];
 const petOwns = (p, lv) => WEAR.filter((w) => (w.lv && lv >= w.lv) || (p.items || []).includes(w.id));
 function wearSvg(kind, ids, back) {
-  const t = kind === "cat" ? 17 : 26, n = kind === "cat" ? 64 : 57;
+  const t = kind === "cat" ? 17 : 14, n = kind === "cat" ? 64 : 65;
   const art = {
-    cape: `<path d="M22 50q28-10 56 0l10 44H12z" fill="#7b3fb5"/>`,
-    bag: `<path d="M77 58 68 54" stroke="#7a5230" stroke-width="3"/><rect x="76" y="56" width="16" height="20" rx="4" fill="#9b6a3a"/><rect x="79" y="62" width="10" height="5" rx="2" fill="#7a5230"/>`,
-    ribbon: `<g transform="translate(64 ${t + 3})"><path d="M0 0l-9-6v12zM0 0l9-6v12z" fill="#e24a6a"/><circle r="3" fill="#c23050"/></g>`,
-    cap: `<path d="M31 ${t + 9}q19-24 38 0z" fill="#2f6fd6"/><path d="M64 ${t + 9}h16" stroke="#2f6fd6" stroke-width="4" stroke-linecap="round"/>`,
-    crown: `<path d="M37 ${t + 5}l3-13 6 8 4-11 4 11 6-8 3 13z" fill="#f2c230" stroke="#c9961a" stroke-width="1.2" stroke-linejoin="round"/>`,
-    knit: `<path d="M30 ${t + 9}q20-28 40 0z" fill="#d8443c"/><rect x="29" y="${t + 6}" width="42" height="6" rx="3" fill="#fff"/><circle cx="50" cy="${t - 12}" r="4.5" fill="#fff"/>`,
-    straw: `<ellipse cx="50" cy="${t + 6}" rx="31" ry="5" fill="#e8c46a"/><path d="M36 ${t + 6}q14-20 28 0z" fill="#e8c46a"/><rect x="36" y="${t + 1}" width="28" height="3" fill="#d24a3a"/>`,
-    sakura: `<g transform="translate(64 ${t + 4})" fill="#f6b6c8">${[0, 72, 144, 216, 288].map((a) => `<ellipse rx="3" ry="5" transform="rotate(${a}) translate(0 -5)"/>`).join("")}<circle r="2.2" fill="#e2708e"/></g>`,
-    momiji: `<path transform="translate(63 ${t + 4})" d="M0-10 3-3 10-5 5 1 8 7 1 4 0 10-1 4-8 7-5 1-10-5-3-3z" fill="#e2572b"/>`,
-    scarf: `<path d="M27 ${n}q23 9 46 0v7q-23 9-46 0z" fill="#d8443c"/><path d="M61 ${n + 6}l5 15h-8z" fill="#d8443c"/>`,
-    bowtie: `<path d="M50 ${n + 3}l-10-6v12zM50 ${n + 3}l10-6v12z" fill="#2f6fd6"/><circle cx="50" cy="${n + 3}" r="2.6" fill="#1d4fa8"/>`,
-    glasses: `<g fill="none" stroke="#111" stroke-width="2"><circle cx="40" cy="41" r="7"/><circle cx="60" cy="41" r="7"/><path d="M47 41h6"/></g>`,
+    cape: `<path d="M26 58q24-8 48 0l12 36H14z" fill="#8e5cc7"/>`,
+    bag: `<rect x="72" y="62" width="17" height="21" rx="6" fill="#c98a4f"/><rect x="75" y="69" width="11" height="6" rx="3" fill="#a96f3a"/>`,
+    ribbon: `<g transform="translate(70 ${t + 11}) rotate(18)"><path d="M0 0C-5-8-14-8-14 0S-5 8 0 0ZM0 0C5-8 14-8 14 0S5 8 0 0Z" fill="#f2719a"/><circle r="3.4" fill="#d94f7c"/></g>`,
+    cap: `<path d="M25 ${t + 15}C25-2 75-2 75 ${t + 15}Z" fill="#5b93e6"/><path d="M60 ${t + 14}q16-2 24 5" stroke="#3f76c7" stroke-width="5" fill="none" stroke-linecap="round"/><circle cx="50" cy="${t - 6}" r="2.6" fill="#3f76c7"/>`,
+    crown: `<path d="M35 ${t + 7}l-3-17 10 8 8-13 8 13 10-8-3 17z" fill="#ffd34d" stroke="#e0a92a" stroke-width="1.5" stroke-linejoin="round"/><circle cx="50" cy="${t + 2}" r="2.4" fill="#f2719a"/>`,
+    knit: `<path d="M24 ${t + 15}C24-6 76-6 76 ${t + 15}Z" fill="#ef6f6c"/><rect x="22" y="${t + 9}" width="56" height="9" rx="4.5" fill="#fff4ea"/><circle cx="50" cy="${t - 8}" r="6" fill="#fff4ea"/>`,
+    straw: `<ellipse cx="50" cy="${t + 12}" rx="38" ry="6.5" fill="#f2d68a"/><path d="M31 ${t + 12}C31-6 69-6 69 ${t + 12}Z" fill="#f2d68a"/><path d="M31 ${t + 7}q19 5 38 0v5q-19 5-38 0z" fill="#ef6f6c"/>`,
+    sakura: `<g transform="translate(71 ${t + 10})" fill="#ffc2d4">${[0, 72, 144, 216, 288].map((a) => `<ellipse rx="3.8" ry="6" transform="rotate(${a}) translate(0 -6)"/>`).join("")}<circle r="2.6" fill="#f2719a"/></g>`,
+    momiji: `<path transform="translate(71 ${t + 10}) scale(1.15) rotate(15)" d="M0-10 3-3 10-5 5 1 8 7 1 4 0 10-1 4-8 7-5 1-10-5-3-3z" fill="#f0703c" stroke="#f0703c" stroke-width="1.5" stroke-linejoin="round"/>`,
+    scarf: `<path d="M26 ${n - 2}q24 10 48 0q3 5 0 9q-24 10-48 0q-3-4 0-9z" fill="#ef6f6c"/><path d="M60 ${n + 6}q5 8 3 17h9q2-10-2-19z" fill="#e25855"/>`,
+    bowtie: `<g transform="translate(50 ${n + 2})"><path d="M0 0C-5-7-13-7-13 0S-5 7 0 0ZM0 0C5-7 13-7 13 0S5 7 0 0Z" fill="#5b93e6"/><circle r="3" fill="#3f76c7"/></g>`,
+    glasses: `<g fill="#ffffff40" stroke="#6b4a2f" stroke-width="2.2"><circle cx="36" cy="46" r="10"/><circle cx="64" cy="46" r="10"/><path d="M46 45q4-2 8 0" fill="none"/></g>`,
   };
-  return (ids || []).filter((id) => (id === "cape") === !!back).map((id) => art[id] || "").join("");
+  return (ids || []).filter((id) => (id === "cape" || id === "bag") === !!back).map((id) => art[id] || "").join("");
+}
+// 目は大きく低めに、ほっぺは丸く。元気がないときは、まゆとまぶたでしょんぼりさせる
+function petFace(mood, ink) {
+  const eye = (x, r) => `<circle cx="${x}" cy="46" r="${r}" fill="${ink}"/><circle cx="${x - r * 0.32}" cy="${46 - r * 0.38}" r="${r * 0.36}" fill="#fff"/><circle cx="${x + r * 0.36}" cy="${46 + r * 0.36}" r="${r * 0.17}" fill="#fff"/>`;
+  const cheek = (o) => `<ellipse cx="24" cy="55" rx="6" ry="3.8" fill="#ff9fb0" opacity="${o}"/><ellipse cx="76" cy="55" rx="6" ry="3.8" fill="#ff9fb0" opacity="${o}"/>`;
+  const line = `stroke="${ink}" stroke-linecap="round" fill="none"`;
+  if (mood === "zero") return `<path d="M29 46q7 6 14 0M57 46q7 6 14 0" stroke-width="2.6" ${line}/>${cheek(0.3)}<path d="M83 22q-5 7 0 10q5-3 0-10z" fill="#9fd4f5"/>`;
+  if (mood === "low") return `${eye(36, 5.6)}${eye(64, 5.6)}<path d="M28 37q5-3 11-2M72 37q-5-3-11-2" stroke-width="2.2" ${line}/>${cheek(0.45)}<path d="M36 54q-3 4 0 6q3-2 0-6z" fill="#9fd4f5"/>`;
+  return `${eye(36, mood === "great" ? 7.2 : 6.4)}${eye(64, mood === "great" ? 7.2 : 6.4)}${cheek(mood === "great" ? 0.95 : 0.65)}`;
 }
 function petSvg(kind, mood, wear) {
-  const eyes = mood === "great" ? `<path d="M37 41q3-4 6 0M57 41q3-4 6 0" stroke="#111" stroke-width="2.4" fill="none" stroke-linecap="round"/>`
-    : mood === "zero" ? `<path d="M36 42h7M57 42h7" stroke="#111" stroke-width="2.4" stroke-linecap="round"/>`
-    : mood === "low" ? `<circle cx="40" cy="42" r="2.6" fill="#111"/><circle cx="60" cy="42" r="2.6" fill="#111"/><path d="M35 37l8-3M65 37l-8-3" stroke="#111" stroke-width="2" stroke-linecap="round"/>`
-    : `<circle cx="40" cy="41" r="3" fill="#111"/><circle cx="60" cy="41" r="3" fill="#111"/>`;
-  const cheek = mood === "great" ? `<circle cx="33" cy="49" r="3.5" fill="#f4a6a6" opacity=".8"/><circle cx="67" cy="49" r="3.5" fill="#f4a6a6" opacity=".8"/>` : "";
+  const sad = mood === "low" || mood === "zero", face = petFace(mood, "#2e2438");
   if (kind === "cat") {
-    const mouth = mood === "great" || mood === "ok" ? `<path d="M46 52q4 4 8 0" stroke="#111" stroke-width="2" fill="none" stroke-linecap="round"/>` : `<path d="M46 55q4-3 8 0" stroke="#111" stroke-width="2" fill="none" stroke-linecap="round"/>`;
-    return `<svg viewBox="0 0 100 100" aria-hidden="true">${wearSvg(kind, wear, true)}<path d="M78 86q16-6 12-24" stroke="#e8a14a" stroke-width="7" fill="none" stroke-linecap="round"/><ellipse cx="50" cy="78" rx="26" ry="18" fill="#e8a14a"/><path d="M24 30 28 8 44 22ZM76 30 72 8 56 22Z" fill="#e8a14a"/><circle cx="50" cy="42" r="26" fill="#f0b25e"/><path d="M28 14l3 11 8-5zM72 14l-3 11-8-5z" fill="#f6c9c9"/>${eyes}${cheek}<path d="M48 48h4l-2 2.5z" fill="#c05a5a"/>${mouth}<path d="M20 44h10M20 50h10M70 44h10M70 50h10" stroke="#8a5a2a" stroke-width="1.4" stroke-linecap="round"/>${wearSvg(kind, wear)}</svg>`;
+    const mouth = mood === "great" ? `<path d="M43 57q3.5 3 7 0q3.5 3 7 0" stroke="#7a4a35" stroke-width="1.8" fill="none" stroke-linecap="round"/><path d="M47 59q3 5 6 0z" fill="#ff8a98"/>`
+      : sad ? `<path d="M46 60q4-3 8 0" stroke="#7a4a35" stroke-width="1.8" fill="none" stroke-linecap="round"/>`
+      : `<path d="M44 57q3 3 6 0q3 3 6 0" stroke="#7a4a35" stroke-width="1.8" fill="none" stroke-linecap="round"/>`;
+    return `<svg viewBox="0 0 100 100" aria-hidden="true">${wearSvg(kind, wear, true)}<path d="M72 84q19 0 16-19q-1-6-6-6" stroke="#f4ac55" stroke-width="9" fill="none" stroke-linecap="round"/><path d="M87 72l-8-1M84 80l-7-4" stroke="#e08b35" stroke-width="3" stroke-linecap="round"/><ellipse cx="50" cy="77" rx="23" ry="19" fill="#f4ac55"/><ellipse cx="50" cy="80" rx="12.5" ry="13" fill="#fff6e8"/><ellipse cx="39" cy="93" rx="8" ry="5" fill="#fff6e8"/><ellipse cx="61" cy="93" rx="8" ry="5" fill="#fff6e8"/><path d="M20 38C13 22 15 8 21 7C27 7 38 14 44 22ZM80 38C87 22 85 8 79 7C73 7 62 14 56 22Z" fill="#f4ac55"/><path d="M24 29C20 21 21 14 24 13C27 14 32 17 35 21ZM76 29C80 21 79 14 76 13C73 14 68 17 65 21Z" fill="#ffc4cf"/><ellipse cx="50" cy="44" rx="35" ry="27" fill="#f9bd6c"/><path d="M50 18v9M40 19l2 8M60 19l-2 8" stroke="#e08b35" stroke-width="3.2" stroke-linecap="round"/><ellipse cx="44" cy="57" rx="8.5" ry="6.5" fill="#fff6e8"/><ellipse cx="56" cy="57" rx="8.5" ry="6.5" fill="#fff6e8"/>${face}<path d="M47.5 52.5h5q.8 0 .3.7l-2.3 2.5q-.5.5-1 0l-2.3-2.5q-.5-.7.3-.7z" fill="#f2798c"/>${mouth}<path d="M9 50l10 1.5M10 58l9-2M91 50l-10 1.5M90 58l-9-2" stroke="#b9792f" stroke-width="1.5" stroke-linecap="round"/>${wearSvg(kind, wear)}</svg>`;
   }
-  const beak = mood === "great" || mood === "ok" ? `<path d="M44 50h12l-6 7z" fill="#f0a020"/>` : `<path d="M45 52h10l-5 4z" fill="#f0a020"/>`;
-  return `<svg viewBox="0 0 100 100" aria-hidden="true">${wearSvg(kind, wear, true)}<ellipse cx="38" cy="94" rx="9" ry="4" fill="#f0a020"/><ellipse cx="62" cy="94" rx="9" ry="4" fill="#f0a020"/><ellipse cx="50" cy="60" rx="32" ry="36" fill="#22303c"/><path d="M19 58q-10 14-4 26M81 58q10 14 4 26" stroke="#22303c" stroke-width="8" fill="none" stroke-linecap="round"/><ellipse cx="50" cy="66" rx="22" ry="27" fill="#fff"/><ellipse cx="50" cy="42" rx="22" ry="17" fill="#fff"/>${eyes}${cheek}${beak}${wearSvg(kind, wear)}</svg>`;
+  const beak = mood === "great" ? `<path d="M42 55q8-4 16 0q-1 8-8 8t-8-8z" fill="#ffae3b"/><path d="M45 58q5 2 10 0q-1 4-5 4t-5-4z" fill="#f2798c"/>`
+    : sad ? `<path d="M44 58q6-3 12 0q-2 4-6 4t-6-4z" fill="#ffae3b"/>` : `<path d="M43 55q7-3 14 0q-2 6-7 6t-7-6z" fill="#ffae3b"/>`;
+  const wings = mood === "great" ? `<path d="M26 66C14 62 9 53 12 49C17 47 26 54 31 62Z" fill="#415680"/><path d="M74 66C86 62 91 53 88 49C83 47 74 54 69 62Z" fill="#415680"/>`
+    : `<path d="M28 64C17 69 14 80 17 85C22 86 29 80 32 72Z" fill="#415680"/><path d="M72 64C83 69 86 80 83 85C78 86 71 80 68 72Z" fill="#415680"/>`;
+  return `<svg viewBox="0 0 100 100" aria-hidden="true">${wearSvg(kind, wear, true)}<ellipse cx="38" cy="93" rx="10" ry="5" fill="#ffae3b"/><ellipse cx="62" cy="93" rx="10" ry="5" fill="#ffae3b"/>${wings}<ellipse cx="50" cy="74" rx="25" ry="20" fill="#4d648f"/><ellipse cx="50" cy="77" rx="17" ry="16" fill="#fffaf0"/><path d="M50 15q-5-7-1-12q2 5 6 7" fill="#4d648f"/><ellipse cx="50" cy="42" rx="34" ry="28" fill="#4d648f"/><path d="M50 30C42 20 21 25 20 45C19 60 33 68 50 68C67 68 81 60 80 45C79 25 58 20 50 30Z" fill="#fffaf0"/><ellipse cx="33" cy="20" rx="8" ry="3.5" fill="#fff" opacity=".22" transform="rotate(-25 33 20)"/>${face}${beak}${wearSvg(kind, wear)}</svg>`;
 }
 // 今週（月曜はじまり）に歩いた分と、今月の消費カロリー
 async function weekAndMonth() {
