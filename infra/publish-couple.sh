@@ -13,6 +13,7 @@ DIST=$(python3 -c 'import re;t=open("cloud-config.js").read();print(re.search(r"
 
 rm -rf dist-couple && mkdir dist-couple
 cp app.js missions.js badges.js style.css cloud.js cloud-config.js sw.js manifest.webmanifest icon-180.png icon-192.png icon-512.png dist-couple/
+cp -R pets dist-couple/
 # app.js より前に、設定とログイン機能を読み込ませる
 VER=$(grep -o 'app.js?v=[0-9]*' index.html | cut -d= -f2)
 python3 - "$VER" <<'PY'
